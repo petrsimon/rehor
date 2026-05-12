@@ -155,6 +155,12 @@ RUN cd .claude/skills/post-pr \
     && uv run pytest -v --tb=short \
     && echo "Post-PR skill tests passed!"
 
+# Run claim-ticket skill tests during build
+RUN cd .claude/skills/claim-ticket \
+    && uv sync --frozen --all-extras \
+    && uv run pytest -v --tb=short \
+    && echo "Claim-ticket skill tests passed!"
+
 ENV HOME=/home/botuser
 USER botuser
 
