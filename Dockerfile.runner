@@ -1,13 +1,22 @@
-# Dev proxy — build custom Caddy from source on UBI (passes EC)
+# Runner instance image — built from dev-bot submodule
+#
+# Usage: Runner repos add dev-bot as a git submodule, then configure
+# Konflux with dockerfile: dev-bot/Dockerfile.runner and context: .
+#
+# Extension points:
+#   setup.sh   — (required) custom build steps (dnf install, config, etc.)
+#   instance/  — (optional) extra files, COPYed to /home/botuser/app/instance/
+
+# Dev proxy — build custom Caddy from source on UBI
 FROM registry.access.redhat.com/ubi9/go-toolset:latest AS dev-proxy-builder
-COPY dev-proxy/ /tmp/dev-proxy/
+COPY dev-bot/dev-proxy/ /tmp/dev-proxy/
 RUN cd /tmp/dev-proxy \
     && go build -o /tmp/caddy .
 
 # Build executor thin client (gh/glab shim that forwards via UDS to proxy sidecar)
 FROM registry.access.redhat.com/ubi9/go-toolset:latest AS executor-client-builder
 WORKDIR /build
-COPY proxy/executor/ .
+COPY dev-bot/proxy/executor/ .
 RUN go mod download \
     && CGO_ENABLED=0 go build -o /tmp/executor-client ./cmd/client
 
@@ -51,7 +60,6 @@ RUN ARCH=$(uname -m | sed 's/x86_64/x64/' | sed 's/aarch64/arm64/') \
     && curl -fsSL "https://nodejs.org/dist/v22.15.0/node-v22.15.0-linux-${ARCH}.tar.gz" \
     | tar -xz -C /usr/local --strip-components=1
 
-
 # Headless Chromium via Playwright (avoids EPEL/CentOS RPMs)
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
 RUN npx playwright install chromium
@@ -61,7 +69,6 @@ RUN ln -sf /usr/bin/python3.12 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.12 /usr/bin/python
 
 # Go — multiple versions via GOVERSIONS build arg
-# Default Go is the first version listed. Bot switches with: eval "$(use-go 1.25.7)"
 ARG GOVERSIONS="1.24.2 1.25.7"
 RUN ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') \
     && for v in $GOVERSIONS; do \
@@ -117,8 +124,8 @@ RUN ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') \
 
 # Dev proxy (custom Caddy for local UI verification against stage)
 COPY --from=dev-proxy-builder /tmp/caddy /usr/local/bin/caddy
-COPY dev-proxy/Caddyfile /etc/caddy/Caddyfile
-COPY dev-proxy/start-proxy.sh /usr/local/bin/start-dev-proxy.sh
+COPY dev-bot/dev-proxy/Caddyfile /etc/caddy/Caddyfile
+COPY dev-bot/dev-proxy/start-proxy.sh /usr/local/bin/start-dev-proxy.sh
 RUN chmod +x /usr/local/bin/start-dev-proxy.sh
 
 # Pre-install MCP servers so they don't need network at runtime
@@ -127,16 +134,13 @@ RUN npm install -g chrome-devtools-mcp@latest @redhat-cloud-services/hcc-pf-mcp
 # uv
 RUN pip3.12 install uv
 
-# mcp-atlassian runs in the proxy container (streamable-http transport).
-# Bot connects via HTTP — no local install needed.
-
 # Non-root user (Claude Code rejects root)
 RUN useradd -m -s /bin/bash botuser
 WORKDIR /home/botuser/app
 
 # Copy project files and install Python deps (as root so uv is available)
-COPY pyproject.toml uv.lock* ./
-COPY bot/ bot/
+COPY dev-bot/pyproject.toml dev-bot/uv.lock* ./
+COPY dev-bot/bot/ bot/
 RUN uv sync --frozen --no-dev
 ENV PATH="/home/botuser/app/.venv/bin:/home/botuser/go/bin:$PATH"
 ENV GOPATH="/home/botuser/go"
@@ -145,8 +149,8 @@ ENV CLOUD_ML_REGION=global
 ENV BUILDAH_ISOLATION=chroot
 
 # Copy bot config files
-COPY config.json CLAUDE.md .mcp.json entrypoint.sh ./
-COPY .claude/ .claude/
+COPY dev-bot/config.json dev-bot/CLAUDE.md dev-bot/.mcp.json dev-bot/entrypoint.sh ./
+COPY dev-bot/.claude/ .claude/
 
 # Run post-pr skill tests during build (validates skill before image is finalized)
 RUN cd .claude/skills/post-pr \
@@ -163,10 +167,20 @@ RUN mkdir -p /home/botuser/.config/containers /home/botuser/.local/share/contain
     && echo -e '[registries.search]\nregistries = ["registry.access.redhat.com", "quay.io", "docker.io"]' \
        > /home/botuser/.config/containers/registries.conf
 
-
-# Fix ownership — botuser:0 + group-writable so OpenShift arbitrary UIDs (always GID 0) can write.
-# Must run last so it covers all dirs created above (.ssh, .config, .gitconfig, etc.)
+# === INSTANCE CUSTOMIZATION ===
+# Runner repos extend the base image here via setup.sh and instance/ files.
 USER 0
+
+# Run instance-specific build steps
+COPY setup.sh /tmp/instance-setup.sh
+RUN chmod +x /tmp/instance-setup.sh \
+    && bash /tmp/instance-setup.sh \
+    && rm /tmp/instance-setup.sh
+
+# Copy instance-specific files (optional — create empty instance/ dir if unused)
+COPY instance/ /home/botuser/app/instance/
+
+# Fix ownership — must run last
 RUN chown -R botuser:0 /home/botuser \
     && chmod -R g+rwX /home/botuser
 USER botuser
