@@ -155,26 +155,41 @@ def sync_config_repo() -> Path | None:
     return agent_dir
 
 
+def _copytree_content_only(src: Path, dst: Path, **kwargs) -> None:
+    """copytree using copyfile (content-only) to avoid EPERM from chmod/copystat
+    under OpenShift arbitrary UIDs on overlay FS.  Re-raises real file copy
+    errors but suppresses directory copystat failures (always emitted by
+    copytree internals).
+    """
+    try:
+        shutil.copytree(src, dst, copy_function=shutil.copyfile, **kwargs)
+    except shutil.Error as exc:
+        real_errors = [e for e in exc.args[0] if not os.path.isdir(e[0])]
+        if real_errors:
+            raise shutil.Error(real_errors) from None
+
+
 def apply_remote_config(script_dir: Path, agent_dir: Path) -> None:
     """Overlay remote agent config onto working directory."""
     logger = logging.getLogger(__name__)
 
     remote_personas = agent_dir / "personas"
     if remote_personas.is_dir():
-        shutil.copytree(remote_personas, script_dir / "personas", dirs_exist_ok=True)
+        _copytree_content_only(
+            remote_personas, script_dir / "personas", dirs_exist_ok=True,
+        )
         logger.info("Applied remote personas")
 
     remote_repos = agent_dir / "project-repos.json"
     if remote_repos.is_file():
-        shutil.copy2(remote_repos, script_dir / "project-repos.json")
+        shutil.copyfile(remote_repos, script_dir / "project-repos.json")
         logger.info("Applied remote project-repos.json")
 
     remote_skills = agent_dir / "skills"
     if remote_skills.is_dir():
-        shutil.copytree(
+        _copytree_content_only(
             remote_skills, script_dir / ".claude" / "skills",
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns(".gitkeep"),
+            dirs_exist_ok=True, ignore=shutil.ignore_patterns(".gitkeep"),
         )
         logger.info("Applied remote custom skills")
 
