@@ -13,6 +13,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+SLEEP_FILE = Path(__file__).resolve().parent.parent.parent.parent / "data" / "cycle-sleep.json"
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from jira_mcp import jira_call
 
@@ -186,6 +188,8 @@ def main():
     candidates = get_candidates()
     if not candidates:
         print("NO CANDIDATES FOUND")
+        SLEEP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SLEEP_FILE.write_text(json.dumps({"recommended_sleep": 3600, "reason": "no_eligible_work"}))
         return
 
     print(f"NEW WORK CANDIDATES ({len(candidates)})")
