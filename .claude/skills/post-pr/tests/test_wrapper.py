@@ -1,6 +1,5 @@
 """Tests for the post_pr.py wrapper script."""
 
-import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -122,11 +121,7 @@ class TestValidateTaskData:
 
     def test_validate_valid_task(self):
         """Test validation of valid task."""
-        task = {
-            "pr_url": "https://github.com/org/repo/pull/123",
-            "pr_number": 123,
-            "summary": "Test PR"
-        }
+        task = {"pr_url": "https://github.com/org/repo/pull/123", "pr_number": 123, "summary": "Test PR"}
 
         valid, field, value = post_pr.validate_task_data(task)
 
@@ -136,10 +131,7 @@ class TestValidateTaskData:
 
     def test_validate_missing_pr_url(self):
         """Test validation fails when pr_url is missing."""
-        task = {
-            "pr_number": 123,
-            "summary": "Test PR"
-        }
+        task = {"pr_number": 123, "summary": "Test PR"}
 
         valid, field, value = post_pr.validate_task_data(task)
 
@@ -149,10 +141,7 @@ class TestValidateTaskData:
 
     def test_validate_missing_pr_number(self):
         """Test validation fails when pr_number is missing."""
-        task = {
-            "pr_url": "https://github.com/org/repo/pull/123",
-            "summary": "Test PR"
-        }
+        task = {"pr_url": "https://github.com/org/repo/pull/123", "summary": "Test PR"}
 
         valid, field, value = post_pr.validate_task_data(task)
 
@@ -204,7 +193,7 @@ class TestHttpRequest:
     def test_http_request_empty_response(self, mock_urlopen):
         """Test HTTP request with empty response."""
         mock_response = MagicMock()
-        mock_response.read.return_value = b''
+        mock_response.read.return_value = b""
         mock_urlopen.return_value.__enter__.return_value = mock_response
 
         result = post_pr.http_request("http://test.com/api")
@@ -233,7 +222,7 @@ class TestMainFunction:
             "jira_key": "TEST-123",
             "pr_url": "https://github.com/org/repo/pull/1",
             "pr_number": 1,
-            "summary": "Test PR"
+            "summary": "Test PR",
         }
 
         mock_result = MagicMock()
@@ -281,7 +270,7 @@ class TestMainFunction:
             "jira_key": "TEST-123",
             "pr_url": "https://github.com/org/repo/pull/1",
             "pr_number": 1,
-            "summary": "Test PR"
+            "summary": "Test PR",
         }
 
         mock_result = MagicMock()

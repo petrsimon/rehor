@@ -17,14 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scripts.post_pr_operations import execute_post_pr_workflow
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from jira_mcp import jira_call
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="[post-pr] %(levelname)s: %(message)s",
-    stream=sys.stdout
-)
+logging.basicConfig(level=logging.INFO, format="[post-pr] %(levelname)s: %(message)s", stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 
@@ -163,7 +158,7 @@ def main():
     pr_number = task["pr_number"]
     summary = task.get("summary", "")
 
-    logger.info(f"Task validated successfully")
+    logger.info("Task validated successfully")
     logger.info(f"  JIRA: {jira_key}")
     logger.info(f"  PR: {pr_url} (#{pr_number})")
     logger.info(f"  Summary: {summary or '(none)'}")
@@ -193,12 +188,14 @@ def main():
     print("=" * 80)
 
     for op in result.operations:
-        status_icon = (
-            "[OK]" if op.status.value == "success"
-            else "[FAIL]" if op.status.value == "failed"
-            else "[SKIP]"
+        status_icon = "[OK]" if op.status.value == "success" else "[FAIL]" if op.status.value == "failed" else "[SKIP]"
+        level = (
+            logging.INFO
+            if op.status.value == "success"
+            else logging.WARNING
+            if op.status.value == "skipped"
+            else logging.ERROR
         )
-        level = logging.INFO if op.status.value == "success" else logging.WARNING if op.status.value == "skipped" else logging.ERROR
         logger.log(level, f"{status_icon} {op.operation}: {op.message}")
 
     print("=" * 80)

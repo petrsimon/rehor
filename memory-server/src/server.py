@@ -7,7 +7,7 @@ from fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse
-from starlette.routing import Mount, Route, WebSocketRoute
+from starlette.routing import Mount, WebSocketRoute
 from starlette.websockets import WebSocket
 
 from .db import close_pool, init_pool
@@ -36,10 +36,10 @@ mcp = FastMCP(
 )
 
 # Register MCP tools
-from .tools.tasks import register_task_tools
-from .tools.rag import register_rag_tools
-from .tools.slack import register_slack_tools
-from .tools.org_members import register_org_member_tools
+from .tools.tasks import register_task_tools  # noqa: E402
+from .tools.rag import register_rag_tools  # noqa: E402
+from .tools.slack import register_slack_tools  # noqa: E402
+from .tools.org_members import register_org_member_tools  # noqa: E402
 
 register_task_tools(mcp)
 register_rag_tools(mcp)
@@ -75,11 +75,29 @@ async def asset_files(request: Request) -> FileResponse:
 
 
 # REST API for the dashboard
-from .api import api_tasks, api_task_delete, api_task_unarchive, api_memories, api_memory_get, api_memory_search, api_memory_embeddings, api_memory_delete, api_memory_upload, api_tags, api_stats, api_bot_status, api_instances, api_costs, api_analytics
+from .api import (  # noqa: E402
+    api_tasks,
+    api_task_delete,
+    api_task_unarchive,
+    api_memories,
+    api_memory_get,
+    api_memory_search,
+    api_memory_embeddings,
+    api_memory_delete,
+    api_memory_upload,
+    api_tags,
+    api_stats,
+    api_bot_status,
+    api_instances,
+    api_costs,
+    api_analytics,
+)
 
 mcp.custom_route("/api/tasks", methods=["GET"])(api_tasks)
 mcp.custom_route("/api/tasks/{jira_key:path}", methods=["DELETE"])(api_task_delete)
-mcp.custom_route("/api/tasks/{jira_key:path}/unarchive", methods=["POST"])(api_task_unarchive)
+mcp.custom_route("/api/tasks/{jira_key:path}/unarchive", methods=["POST"])(
+    api_task_unarchive
+)
 mcp.custom_route("/api/memories", methods=["GET"])(api_memories)
 mcp.custom_route("/api/memories/search", methods=["GET"])(api_memory_search)
 mcp.custom_route("/api/memories/upload", methods=["POST"])(api_memory_upload)
