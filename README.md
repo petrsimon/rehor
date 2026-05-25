@@ -2,7 +2,7 @@
 
 An autonomous developer agent that picks groomed Jira tickets, implements them, opens PRs, and maintains them through review — all without human intervention. It runs in a polling loop using the Claude Agent SDK (Python) and integrates with Jira, GitHub/GitLab, and a persistent memory system.
 
-**Detailed docs:** [Architecture](ARCHITECTURE.md) | [Setup](SETUP.md) | [Operations](OPERATIONS.md)
+**Detailed docs:** [Architecture](ARCHITECTURE.md) | [Setup](SETUP.md) | [Operations](OPERATIONS.md) | [Onboarding a New Instance](docs/onboarding-new-instance.md)
 
 ## Prerequisites
 
