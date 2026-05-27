@@ -1,6 +1,7 @@
 import logging
 import os
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 import httpx
 from fastmcp import FastMCP

@@ -22,9 +22,6 @@ PROJECT_REPOS = (
     Path(__file__).resolve().parent.parent.parent.parent / "project-repos.json"
 )
 BOT_LABEL = os.environ.get("BOT_LABEL", "")
-BOT_BOARD_ID = os.environ.get("BOT_BOARD_ID", "")
-BOT_BOARD_NAME = os.environ.get("BOT_BOARD_NAME", "")
-BOT_SPRINT_PREFIX = os.environ.get("BOT_SPRINT_PREFIX", "")
 BOT_INCLUDE_BACKLOG = os.environ.get("BOT_INCLUDE_BACKLOG", "").lower() in (
     "1",
     "true",
@@ -48,77 +45,6 @@ def jira_search(jql, limit=10):
         return []
     issues = data if isinstance(data, list) else data.get("issues", [])
     return issues
-
-
-def resolve_board_id():
-    if BOT_BOARD_ID:
-        return BOT_BOARD_ID
-    if not BOT_BOARD_NAME:
-        print(
-            "WARN: neither BOT_BOARD_ID nor BOT_BOARD_NAME set, skipping sprint query",
-            file=sys.stderr,
-        )
-        return None
-    data = jira_call(
-        "jira_get_agile_boards",
-        {
-            "board_name": BOT_BOARD_NAME,
-            "limit": 1,
-        },
-    )
-    if not data:
-        print(f"ERR: no board found matching name '{BOT_BOARD_NAME}'", file=sys.stderr)
-        return None
-    boards = data if isinstance(data, list) else data.get("values", [])
-    if not boards:
-        print(f"ERR: no board found matching name '{BOT_BOARD_NAME}'", file=sys.stderr)
-        return None
-    board = boards[0]
-    print(
-        f"Resolved board: {board.get('name', '?')} (id={board['id']})", file=sys.stderr
-    )
-    return str(board["id"])
-
-
-def get_active_sprint():
-    board_id = resolve_board_id()
-    if not board_id:
-        return None
-    data = jira_call(
-        "jira_get_sprints_from_board",
-        {
-            "board_id": board_id,
-            "state": "active",
-            "limit": 10,
-        },
-    )
-    if not data:
-        return None
-    sprints = data if isinstance(data, list) else data.get("values", [])
-    if not sprints:
-        return None
-    if BOT_SPRINT_PREFIX:
-        matched = [
-            s for s in sprints if s.get("name", "").startswith(BOT_SPRINT_PREFIX)
-        ]
-        if matched:
-            sprint = matched[0]
-            print(
-                f"Active sprint (prefix={BOT_SPRINT_PREFIX}): {sprint.get('name', '?')} (id={sprint['id']})",
-                file=sys.stderr,
-            )
-            return sprint
-        names = [s.get("name", "?") for s in sprints]
-        print(
-            f"WARN: no sprint matching prefix '{BOT_SPRINT_PREFIX}', available: {names}",
-            file=sys.stderr,
-        )
-        return None
-    sprint = sprints[0]
-    print(
-        f"Active sprint: {sprint.get('name', '?')} (id={sprint['id']})", file=sys.stderr
-    )
-    return sprint
 
 
 def load_project_repos():
@@ -206,18 +132,31 @@ def get_candidates():
 
     results = []
     for issue in candidates:
-        fields = issue.get("fields", {})
+        fields = issue.get("fields") or issue
         labels = fields.get("labels", [])
         repos = match_repo_labels(labels, repo_lookup)
-        comments = (fields.get("comment", {}).get("comments") or [])[-5:]
+        comment_data = fields.get("comment", {})
+        if isinstance(comment_data, dict):
+            comments = (comment_data.get("comments") or [])[-5:]
+        else:
+            comments = []
+        status = fields.get("status", {})
+        priority = fields.get("priority", {})
+        issue_type = fields.get("issuetype") or fields.get("issue_type") or {}
 
         results.append(
             {
                 "key": issue["key"],
-                "summary": fields.get("summary", ""),
-                "status": fields.get("status", {}).get("name", "?"),
-                "priority": fields.get("priority", {}).get("name", "?"),
-                "type": fields.get("issuetype", {}).get("name", "?"),
+                "summary": fields.get("summary") or issue.get("summary", ""),
+                "status": status.get("name", "?")
+                if isinstance(status, dict)
+                else str(status),
+                "priority": priority.get("name", "?")
+                if isinstance(priority, dict)
+                else str(priority),
+                "type": issue_type.get("name", "?")
+                if isinstance(issue_type, dict)
+                else str(issue_type),
                 "labels": labels,
                 "repos": repos,
                 "description": fields.get("description") or "",
