@@ -1,7 +1,7 @@
 ---
 name: auto-fork
 description: >
-  Auto-fork repos + update config. Scans project-repos.json for missing forks → forks via gh → updates config → commits.
+  Auto-fork repos + update config. Scans project-repos.json for missing forks → forks via gh/glab → updates config → commits.
 when_to_use: >
   Triage when repo needs fork or setting up instances. Triggers: "fork repo", "auto fork", "setup fork", "missing fork".
 user-invocable: true
@@ -21,12 +21,10 @@ python3 .claude/skills/auto-fork/auto_fork.py 2>&1
 The script executes these operations:
 
 1. **detect_unforkable_repos** - Scan project-repos.json for repos needing forks
-2. **fork_repos** - Create forks using `gh repo fork` for GitHub repos
+2. **fork_repos** - Create forks using `gh repo fork` (GitHub) or `glab repo fork` (GitLab)
 3. **update_and_commit** - Update project-repos.json with new fork URLs and commit changes
 
 After this completes successfully, use the **push-and-pr** skill to push and create PR.
-
-GitLab repos are skipped with a logged notice (manual forking required).
 
 ## Configuration
 
@@ -52,4 +50,4 @@ Repos w/ `upstream` but `url` not matching bot account → need fork.
 ## Error Handling
 
 Fail-fast: if any fork operation fails, stops and reports error.
-Idempotent: safe to re-run if forks already exist (gh repo fork handles gracefully).
+Idempotent: safe to re-run if forks already exist (gh/glab repo fork handle gracefully).

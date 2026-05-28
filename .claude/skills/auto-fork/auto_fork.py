@@ -2,17 +2,16 @@
 """
 Auto-fork workflow for repos in project-repos.json.
 
-Detects repos without forks, creates forks under bot's GitHub account,
+Detects repos without forks, creates forks under bot's GitHub or GitLab account,
 and updates project-repos.json locally. After committing changes, use
 push-and-pr skill to create the PR.
 
 Operations:
 1. detect_unforkable_repos - scan for repos needing forks
-2. fork_repos - create forks using gh repo fork
+2. fork_repos - create forks using gh repo fork (GitHub) or glab repo fork (GitLab)
 3. update_and_commit - update project-repos.json and commit changes
 
 After this script completes, use push-and-pr skill to create the PR.
-GitLab repos are skipped with logged notice.
 """
 
 import argparse
@@ -135,19 +134,11 @@ class AutoForkOperations:
         A repo needs a fork if:
         - It has an 'upstream' field
         - Its 'url' field doesn't match bot's account pattern
-        - It's a GitHub repo (GitLab skipped for now)
+        - Supports both GitHub and GitLab repos
 
         Returns:
             OperationResult with list of repos needing forks
         """
-        if not self.bot_username:
-            error_msg = "BOT_GITHUB_USERNAME env var not set"
-            logger.error(error_msg)
-            return OperationResult(
-                operation="detect_unforkable_repos",
-                status=OperationStatus.FAILED,
-                message=error_msg,
-            )
 
         if not self.project_repos_path.exists():
             error_msg = f"project-repos.json not found at {self.project_repos_path}"
@@ -239,6 +230,21 @@ class AutoForkOperations:
             return f"https://{GITLAB_HOST}/{self.gl_username}/{repo_name}.git"
         return f"https://github.com/{self.bot_username}/{repo_name}.git"
 
+    def _record_fork(self, repo_name: str, host: str) -> str:
+        """
+        Record successful fork and return fork URL.
+
+        Args:
+            repo_name: Name of the repository
+            host: Host type ("github" or "gitlab")
+
+        Returns:
+            Fork URL
+        """
+        fork_url = self._get_fork_url(repo_name, host)
+        self.forked_repos[repo_name] = fork_url
+        return fork_url
+
     def fork_repos(self) -> OperationResult:
         """
         Create forks for detected repos using gh or glab.
@@ -264,8 +270,7 @@ class AutoForkOperations:
             logger.info(f"Forking {path} ({repo.host})...")
 
             if self.dry_run:
-                fork_url = self._get_fork_url(repo.name, repo.host)
-                self.forked_repos[repo.name] = fork_url
+                fork_url = self._record_fork(repo.name, repo.host)
                 logger.info(f"[DRY RUN] Would fork {path} to {fork_url}")
                 continue
 
@@ -297,16 +302,14 @@ class AutoForkOperations:
                     # Check if already forked (not an error)
                     if "already exists" in result.stderr.lower() or "already forked" in result.stderr.lower():
                         logger.info(f"{path} already forked")
-                        fork_url = self._get_fork_url(repo.name, repo.host)
-                        self.forked_repos[repo.name] = fork_url
+                        self._record_fork(repo.name, repo.host)
                     else:
                         error_msg = f"Failed to fork {path}: {result.stderr}"
                         logger.error(error_msg)
                         failed.append(repo.name)
                         continue
                 else:
-                    fork_url = self._get_fork_url(repo.name, repo.host)
-                    self.forked_repos[repo.name] = fork_url
+                    fork_url = self._record_fork(repo.name, repo.host)
                     logger.info(f"Forked {path} to {fork_url}")
 
             except Exception as e:
