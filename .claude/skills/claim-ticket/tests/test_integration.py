@@ -50,8 +50,11 @@ class TestWorkflow:
         )
 
         assert result.success is False
-        assert len(result.operations) == 1
-        assert result.operations[0].status == OperationStatus.FAILED
+        assert len(result.operations) == 2
+        assert result.operations[0].status == OperationStatus.SUCCESS
+        assert result.operations[0].operation == "get_bot_email"
+        assert result.operations[1].status == OperationStatus.FAILED
+        assert result.operations[1].operation == "get_transitions"
 
     def test_workflow_missing_memory_url(self):
         """Test workflow fails without memory URL."""
