@@ -27,65 +27,24 @@ def clear_bot_account_cache():
     ClaimTicketOperations._bot_account_id_cache = None
 
 
-class TestGetBotAccountId:
-    """Test get_bot_account_id operation."""
+class TestGetBotEmail:
+    """Test get_bot_email operation."""
 
-    @patch("scripts.claim_ticket_operations.jira_call")
-    def test_get_bot_account_id_success(self, mock_jira_call, operations):
-        """Test successful bot account ID retrieval via MCP."""
-        mock_jira_call.return_value = {"account_id": "bot-account-123"}
-
-        result = operations.get_bot_account_id()
+    def test_get_bot_email_success(self, operations):
+        """Test successful bot email retrieval from env var."""
+        result = operations.get_bot_email()
 
         assert result.status == OperationStatus.SUCCESS
-        assert result.operation == "get_bot_account_id"
-        assert "bot-account-123" in result.message
-        assert result.details["account_id"] == "bot-account-123"
-        assert operations.bot_account_id == "bot-account-123"
+        assert result.operation == "get_bot_email"
+        assert "bot@example.com" in result.message
+        assert result.details["email"] == "bot@example.com"
+        assert operations.bot_account_id == "bot@example.com"
 
-        mock_jira_call.assert_called_once_with("jira_get_user_profile", {"user_identifier": "bot@example.com"})
-
-    @patch("scripts.claim_ticket_operations.jira_call")
-    def test_get_bot_account_id_caching(self, mock_jira_call, operations):
-        """Test bot account ID is cached across instances."""
-        mock_jira_call.return_value = {"account_id": "bot-account-456"}
-
-        # First call - should hit MCP
-        result1 = operations.get_bot_account_id()
-        assert result1.status == OperationStatus.SUCCESS
-        assert mock_jira_call.call_count == 1
-
-        # Second call - should use cache
-        result2 = operations.get_bot_account_id()
-        assert result2.status == OperationStatus.SUCCESS
-        assert "cache" in result2.message.lower()
-        assert mock_jira_call.call_count == 1  # No additional MCP call
-
-    @patch("scripts.claim_ticket_operations.jira_call")
-    def test_get_bot_account_id_none_response(self, mock_jira_call, operations):
-        """Test handling when MCP returns None."""
-        mock_jira_call.return_value = None
-
-        result = operations.get_bot_account_id()
-
-        assert result.status == OperationStatus.FAILED
-        assert "returned None for bot@example.com" in result.message
-
-    @patch("scripts.claim_ticket_operations.jira_call")
-    def test_get_bot_account_id_dry_run(self, mock_jira_call):
-        """Test dry run mode."""
-        ops = ClaimTicketOperations(memory_url="https://test.example.com", dry_run=True)
-        result = ops.get_bot_account_id()
-
-        assert result.status == OperationStatus.SUCCESS
-        assert "dry run" in result.message.lower()
-        mock_jira_call.assert_not_called()
-
-    def test_get_bot_account_id_missing_env_var(self, monkeypatch):
+    def test_get_bot_email_missing_env_var(self, monkeypatch):
         """Test failure when BOT_JIRA_EMAIL is not set."""
         monkeypatch.delenv("BOT_JIRA_EMAIL", raising=False)
         ops = ClaimTicketOperations(memory_url="https://test.example.com")
-        result = ops.get_bot_account_id()
+        result = ops.get_bot_email()
 
         assert result.status == OperationStatus.FAILED
         assert "BOT_JIRA_EMAIL" in result.message
@@ -114,6 +73,19 @@ class TestGetTransitions:
         mock_jira_call.assert_called_once_with("jira_get_transitions", {"issue_key": "RHCLOUD-12345"})
 
     @patch("scripts.claim_ticket_operations.jira_call")
+    def test_get_transitions_flat_list(self, mock_jira_call, operations):
+        """Test transition retrieval when MCP returns flat list."""
+        mock_jira_call.return_value = [
+            {"id": "11", "name": "To Do"},
+            {"id": "21", "name": "In Progress"},
+        ]
+
+        result = operations.get_transitions("RHCLOUD-12345")
+
+        assert result.status == OperationStatus.SUCCESS
+        assert operations.transition_id == "21"
+
+    @patch("scripts.claim_ticket_operations.jira_call")
     def test_get_transitions_not_found(self, mock_jira_call, operations):
         """Test when In Progress transition not found."""
         mock_jira_call.return_value = {"transitions": [{"id": "11", "name": "To Do"}]}
@@ -129,8 +101,8 @@ class TestAssignTicket:
 
     @patch("scripts.claim_ticket_operations.jira_call")
     def test_assign_ticket_success(self, mock_jira_call, operations):
-        """Test successful ticket assignment."""
-        operations.bot_account_id = "bot-123"
+        """Test successful ticket assignment using email string."""
+        operations.bot_account_id = "bot@example.com"
         mock_jira_call.return_value = {}
 
         result = operations.assign_ticket("RHCLOUD-12345")
@@ -138,7 +110,7 @@ class TestAssignTicket:
         assert result.status == OperationStatus.SUCCESS
         mock_jira_call.assert_called_once_with(
             "jira_update_issue",
-            {"issue_key": "RHCLOUD-12345", "fields": {"assignee": {"accountId": "bot-123"}}},
+            {"issue_key": "RHCLOUD-12345", "fields": '{"assignee": "bot@example.com"}'},
         )
 
     def test_assign_ticket_no_account_id(self, operations):
@@ -240,6 +212,17 @@ class TestGetActiveSprint:
         assert result.status == OperationStatus.SUCCESS
         assert operations.sprint_id == 12345
         mock_jira_call.assert_called_once_with("jira_get_sprints_from_board", {"board_id": "9297", "state": "active"})
+
+    @patch("scripts.claim_ticket_operations.jira_call")
+    def test_get_active_sprint_flat_list(self, mock_jira_call, operations):
+        """Test sprint retrieval when MCP returns flat list."""
+        operations.board_id = "9297"
+        mock_jira_call.return_value = [{"id": 12345, "name": "Sprint 42"}]
+
+        result = operations.get_active_sprint()
+
+        assert result.status == OperationStatus.SUCCESS
+        assert operations.sprint_id == 12345
 
     @patch("scripts.claim_ticket_operations.jira_call")
     def test_get_active_sprint_no_active(self, mock_jira_call, operations):

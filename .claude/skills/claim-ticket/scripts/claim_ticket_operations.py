@@ -2,7 +2,7 @@
 Claim ticket workflow operations.
 
 Consolidates ticket claiming into a single script:
-1. get_bot_account_id - retrieve bot's JIRA account ID via MCP
+1. get_bot_email - retrieve bot's JIRA account ID via MCP
 2. get_transitions - get available transitions via MCP
 3. assign_ticket - assign ticket via MCP
 4. transition_to_in_progress - move to "In Progress" via MCP
@@ -90,83 +90,30 @@ class ClaimTicketOperations:
         self.board_id: Optional[str] = None
         self.sprint_id: Optional[int] = None
 
-    def get_bot_account_id(self) -> OperationResult:
+    def get_bot_email(self) -> OperationResult:
         """
-        Get bot's JIRA identity from BOT_JIRA_EMAIL env var, then resolve account ID via MCP.
+        Get bot's JIRA email from BOT_JIRA_EMAIL env var.
 
-        Returns:
-            OperationResult with account ID
+        No MCP call needed — jira_update_issue accepts email strings directly.
         """
-        if ClaimTicketOperations._bot_account_id_cache:
-            self.bot_account_id = ClaimTicketOperations._bot_account_id_cache
-            logger.info(f"Using cached bot account ID: {self.bot_account_id}")
-            return OperationResult(
-                operation="get_bot_account_id",
-                status=OperationStatus.SUCCESS,
-                message=f"Retrieved bot account ID from cache: {self.bot_account_id}",
-                details={"account_id": self.bot_account_id},
-            )
-
         bot_email = os.environ.get("BOT_JIRA_EMAIL")
         if not bot_email:
             error_msg = "BOT_JIRA_EMAIL env var not set"
             logger.error(error_msg)
             return OperationResult(
-                operation="get_bot_account_id",
+                operation="get_bot_email",
                 status=OperationStatus.FAILED,
                 message=error_msg,
             )
 
-        logger.info(f"Resolving JIRA account for {bot_email}...")
-
-        if self.dry_run:
-            self.bot_account_id = "dry-run-account-id"
-            logger.info(f"[DRY RUN] Would resolve account for {bot_email}")
-            return OperationResult(
-                operation="get_bot_account_id",
-                status=OperationStatus.SUCCESS,
-                message=f"Retrieved bot account ID (dry run): {self.bot_account_id}",
-                details={"account_id": self.bot_account_id},
-            )
-
-        try:
-            data = jira_call("jira_get_user_profile", {"user_identifier": bot_email})
-            if not data:
-                error_msg = f"jira_get_user_profile returned None for {bot_email}"
-                logger.error(error_msg)
-                return OperationResult(
-                    operation="get_bot_account_id",
-                    status=OperationStatus.FAILED,
-                    message=error_msg,
-                )
-
-            self.bot_account_id = data.get("account_id") or data.get("accountId")
-            if not self.bot_account_id:
-                error_msg = f"No account_id in jira_get_user_profile response: {data}"
-                logger.error(error_msg)
-                return OperationResult(
-                    operation="get_bot_account_id",
-                    status=OperationStatus.FAILED,
-                    message=error_msg,
-                )
-
-            ClaimTicketOperations._bot_account_id_cache = self.bot_account_id
-
-            logger.info(f"Retrieved bot account ID: {self.bot_account_id}")
-            return OperationResult(
-                operation="get_bot_account_id",
-                status=OperationStatus.SUCCESS,
-                message=f"Retrieved bot account ID: {self.bot_account_id}",
-                details={"account_id": self.bot_account_id},
-            )
-        except Exception as e:
-            error_msg = f"Failed to get bot account ID: {str(e)}"
-            logger.error(error_msg)
-            return OperationResult(
-                operation="get_bot_account_id",
-                status=OperationStatus.FAILED,
-                message=error_msg,
-            )
+        self.bot_account_id = bot_email
+        logger.info(f"Using bot email for assignment: {bot_email}")
+        return OperationResult(
+            operation="get_bot_email",
+            status=OperationStatus.SUCCESS,
+            message=f"Using bot email: {bot_email}",
+            details={"email": bot_email},
+        )
 
     def get_transitions(self, jira_key: str) -> OperationResult:
         """
@@ -201,7 +148,7 @@ class ClaimTicketOperations:
                     message=error_msg,
                 )
 
-            transitions = data.get("transitions", [])
+            transitions = data if isinstance(data, list) else data.get("transitions", [])
 
             # Find "In Progress" transition
             in_progress_transition = None
@@ -252,7 +199,7 @@ class ClaimTicketOperations:
             OperationResult with assignment details
         """
         if not self.bot_account_id:
-            error_msg = "Bot account ID not available. Run get_bot_account_id first."
+            error_msg = "Bot account ID not available. Run get_bot_email first."
             logger.error(error_msg)
             return OperationResult(
                 operation="assign_ticket",
@@ -275,7 +222,7 @@ class ClaimTicketOperations:
                 "jira_update_issue",
                 {
                     "issue_key": jira_key,
-                    "fields": {"assignee": {"accountId": self.bot_account_id}},
+                    "fields": json.dumps({"assignee": self.bot_account_id}),
                 },
             )
 
@@ -485,7 +432,7 @@ class ClaimTicketOperations:
                     message=error_msg,
                 )
 
-            sprints = data.get("sprints", [])
+            sprints = data if isinstance(data, list) else data.get("sprints", [])
 
             if not sprints:
                 error_msg = f"No active sprint found on board {self.board_id}"
@@ -684,15 +631,15 @@ def execute_claim_ticket_workflow(
     logger.info(f"Starting claim ticket workflow for {jira_key}...")
 
     # 1. Get bot account ID
-    if "get_bot_account_id" not in skip_operations:
-        result = operations.get_bot_account_id()
+    if "get_bot_email" not in skip_operations:
+        result = operations.get_bot_email()
         results.append(result)
         if result.status == OperationStatus.FAILED:
             return WorkflowResult(success=False, operations=results, jira_key=jira_key)
     else:
         results.append(
             OperationResult(
-                operation="get_bot_account_id",
+                operation="get_bot_email",
                 status=OperationStatus.SKIPPED,
                 message="Skipped by user request",
             )

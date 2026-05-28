@@ -37,7 +37,6 @@ def mock_memory_server():
 def successful_jira_responses():
     """Standard JIRA responses for successful workflow."""
     return {
-        "jira_get_user_profile": {"account_id": TEST_BOT_ACCOUNT_ID},
         "jira_get_transitions": {"transitions": [{"id": TEST_TRANSITION_ID, "name": "In Progress"}]},
         "jira_update_issue": {},
         "jira_transition_issue": {},
