@@ -1,6 +1,6 @@
 # Onboarding a New Bot Instance
 
-How to add a new bot runner instance to the shared OpenShift cluster. Each instance gets its own Jira label, repo set, and personas, but shares the proxy, memory server, database, and Vault secrets deployed by the primary instance (platform-frontend-ai-dev).
+How to add a new bot runner instance to the shared OpenShift cluster. Each instance gets its own Jira label, repo set, and personas, but shares the memory server, database, and Vault secrets deployed by the primary instance (platform-frontend-ai-dev). Instances share the proxy by default, but can optionally deploy their own proxy for custom Jira credentials.
 
 For the system architecture, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 
@@ -139,7 +139,7 @@ git commit -m "chore: update dev-bot submodule"
 
 ## Step 2: Deploy Template
 
-Create `deploy/template.yaml`. This is a **bot-only** template — it does NOT create the proxy or memory server (those come from the primary instance). To create a custom proxy instance (needed if custom secrets are required, like Vertex AI credentials or a custom bot identity), contact the maintainers.
+Create `deploy/template.yaml`. This is a **bot-only** template — it does NOT create the memory server (that comes from the primary instance). The proxy is shared by default but can optionally be deployed per-instance for custom Jira credentials.
 
 Copy from [`hcc-ui-agent-dev/deploy/template.yaml`](https://github.com/RedHatInsights/hcc-ui-agent-dev/blob/master/deploy/template.yaml) and adjust:
 
@@ -148,15 +148,26 @@ Copy from [`hcc-ui-agent-dev/deploy/template.yaml`](https://github.com/RedHatIns
 - Default `BOT_LABEL` — your Jira label
 - `BOT_IMAGE` — your Quay image path
 
-The template creates two resources:
-1. **Deployment** — bot container with env vars pointing to shared infra (`devbot-proxy`, `devbot-memory-server`)
-2. **NetworkPolicy** — egress restricted to proxy + memory-server + DNS only
+The template creates these resources:
+1. **Proxy Deployment** (optional) — own proxy with custom Jira credentials. Set `PROXY_REPLICAS=0` (default) to use the shared proxy, or `PROXY_REPLICAS=1` to deploy your own.
+2. **Proxy Service** (optional) — ClusterIP service for the per-instance proxy.
+3. **Bot Deployment** — bot container with env vars pointing to shared infra.
+4. **NetworkPolicy** — egress restricted to proxy + memory-server + DNS only. References `${PROXY_NAME}` so it correctly targets either shared or per-instance proxy.
 
 Key environment variables (already wired in the template):
 - `BOT_MEMORY_URL=http://devbot-memory-server:8080/mcp` — shared memory server
-- `EXECUTOR_ADDR=devbot-proxy:9090` — shared executor (git/gh/glab/gpg)
-- `HTTP_PROXY=http://devbot-proxy:3128` — shared Squid proxy
-- `JIRA_MCP_URL=http://devbot-proxy:8444/mcp` — shared Jira MCP
+- `EXECUTOR_ADDR=${PROXY_NAME}:9090` — executor (shared or per-instance proxy)
+- `HTTP_PROXY=http://${PROXY_NAME}:3128` — Squid proxy
+- `JIRA_MCP_URL=http://${PROXY_NAME}:8444/mcp` — Jira MCP
+
+### Shared vs Per-Instance Proxy
+
+| Mode | `PROXY_REPLICAS` | `PROXY_NAME` | `JIRA_SECRET_NAME` | When to use |
+|------|-------------------|--------------|---------------------|-------------|
+| **Shared** (default) | `0` | `devbot-proxy` | `devbot-secrets` | Same Jira identity as primary instance |
+| **Per-instance** | `1` | unique name (e.g. `devbot-myteam-proxy`) | your secret name | Custom Jira credentials needed (different Jira project access) |
+
+**Why a separate proxy?** Bot pods are network-isolated — the NetworkPolicy only allows egress to the proxy and memory server. The proxy runs mcp-atlassian (Jira MCP server) with the Jira credentials baked in. To use a different Jira account, you need a separate proxy pod with different credentials. A sidecar won't work because pods in the same deployment share the same NetworkPolicy.
 
 ### DNS Egress — Important
 
@@ -242,6 +253,12 @@ resourceTemplates:
       BOT_CONFIG_REPO: https://github.com/YourOrg/my-bot-instance.git
       BOT_CONFIG_PATH: instance/my-config
       SLACK_WEBHOOK_URL: 'https://hooks.slack.com/...'
+      # --- Per-instance proxy (optional — only if custom Jira creds needed) ---
+      # PROXY_IMAGE: quay.io/redhat-services-prod/hcc-platex-services/platform-frontend-ai-dev-proxy
+      # PROXY_IMAGE_TAG: <proxy-image-sha>
+      # PROXY_REPLICAS: '1'
+      # PROXY_NAME: devbot-myteam-proxy
+      # JIRA_SECRET_NAME: myteam-jira-secrets
 ```
 
 ### Add image pattern
@@ -270,7 +287,28 @@ Your instance deploys to the **same namespace** as the primary instance — that
 
 ### Vault Secrets
 
-The bot uses the **shared** `devbot-secrets` Vault secret (deployed by the primary instance). All bot instances share the same GitHub/GitLab/Jira credentials. No new Vault config needed unless you need instance-specific credentials.
+The bot uses the **shared** `devbot-secrets` Vault secret (deployed by the primary instance). All bot instances share the same GitHub/GitLab/GPG/GCP credentials.
+
+**Instance-specific Jira credentials**: If your instance needs its own Jira identity (e.g. access to a project the shared account can't reach), add a second Vault secret to the namespace YAML:
+
+```yaml
+# In namespaces/stage.hcmais01ue1.yml
+openshiftResources:
+- provider: vault-secret
+  path: insights/secrets/insights-dev/platform-experience-dev/ai-sdlc-credentials
+  name: devbot-secrets           # shared — already exists
+  version: 14
+  annotations:
+    qontract.recycle: "true"
+- provider: vault-secret
+  path: your/vault/path/jira-credentials
+  name: myteam-jira-secrets      # instance-specific
+  version: 1
+  annotations:
+    qontract.recycle: "true"
+```
+
+The instance-specific secret needs two keys: `jira-email` and `jira-token`. Then set `JIRA_SECRET_NAME=myteam-jira-secrets` and `PROXY_REPLICAS=1` in your deploy.yml parameters.
 
 ### Reference: Existing app-interface config
 
@@ -344,6 +382,11 @@ After deploying, verify in order:
 | `BOT_SPRINT_PREFIX` | no | Sprint name prefix filter (for sprint assignment only) |
 | `BOT_INCLUDE_BACKLOG` | no | `'true'` to include backlog tickets |
 | `SLACK_WEBHOOK_URL` | no | Slack webhook for notifications |
+| `PROXY_IMAGE` | no | Proxy container image (only needed if `PROXY_REPLICAS=1`) |
+| `PROXY_IMAGE_TAG` | no | Proxy image tag (default: `latest`) |
+| `PROXY_REPLICAS` | no | `'0'` = use shared proxy (default), `'1'` = deploy own proxy |
+| `PROXY_NAME` | no | Proxy service name (default: `devbot-proxy`). Set to a unique name when deploying own proxy. |
+| `JIRA_SECRET_NAME` | no | Vault secret with `jira-email` + `jira-token` keys (default: `devbot-secrets`) |
 
 ---
 
@@ -370,7 +413,9 @@ When changes span multiple repos, merge in this order:
 3. **runner instance** (submodule bump) — last, after dev-bot merges
 
 ### Shared Jira identity
-All bot instances share the same Jira credentials (`devbot-secrets/jira-email`). The bot cannot filter comments by author — it identifies its own comments by content patterns (structured reports, PR links, tables), not by username.
+By default, all bot instances share the same Jira credentials (`devbot-secrets/jira-email`). The bot cannot filter comments by author — it identifies its own comments by content patterns (structured reports, PR links, tables), not by username.
+
+If your instance needs a different Jira identity (e.g. access to a restricted project), deploy a per-instance proxy with custom credentials. See the **Shared vs Per-Instance Proxy** table in Step 2 and **Vault Secrets** in Step 4.
 
 ### `BOT_BOARD_NAME` is fragile
 If someone renames the Jira board, `claim-ticket` breaks. Consider using `BOT_BOARD_ID` (stable numeric ID) instead. The ticket query (`new-work`) doesn't use the board at all — it's label-only with `sprint in openSprints()`.
