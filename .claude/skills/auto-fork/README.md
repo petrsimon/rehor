@@ -13,13 +13,22 @@ Automatically fork repos and update configuration. Detects repos in `project-rep
 
 ### Basic Workflow
 
-```bash
-# Step 1: Fork repos and commit changes
-python3 auto_fork.py
+This is a two-step process:
 
-# Step 2: Push and create PR (use push-and-pr skill)
-# The script creates branch bot/auto-fork (or bot/auto-fork-{instance_id})
+**Step 1: Fork and commit**
+```bash
+python3 auto_fork.py
 ```
+
+The script outputs the working directory path.
+
+**Step 2: Push and create PR (REQUIRED)**
+```bash
+cd <working_dir_from_step_1>
+# Then invoke /push-and-pr skill
+```
+
+Without step 2, local changes are lost on pod restart (config repo re-cloned fresh each cycle).
 
 ### Dry Run
 

@@ -384,11 +384,11 @@ class AutoForkOperations:
             subprocess.CalledProcessError: If git operations fail
         """
         config_work_dir = self.config_dir
-        os.chdir(config_work_dir)
 
         # Ensure we're on default branch and up to date
         subprocess.run(
             ["git", "fetch", "origin"],
+            cwd=config_work_dir,
             check=True,
             capture_output=True,
             timeout=30,
@@ -398,12 +398,14 @@ class AutoForkOperations:
 
         subprocess.run(
             ["git", "checkout", default_branch],
+            cwd=config_work_dir,
             check=True,
             capture_output=True,
         )
 
         subprocess.run(
             ["git", "pull", "--ff-only"],
+            cwd=config_work_dir,
             check=True,
             capture_output=True,
         )
@@ -414,6 +416,7 @@ class AutoForkOperations:
 
         subprocess.run(
             ["git", "checkout", "-b", branch_name],
+            cwd=config_work_dir,
             check=True,
             capture_output=True,
         )
@@ -434,6 +437,7 @@ class AutoForkOperations:
         rel_path = self.project_repos_path.relative_to(config_work_dir)
         subprocess.run(
             ["git", "add", str(rel_path)],
+            cwd=config_work_dir,
             check=True,
             capture_output=True,
         )
@@ -445,13 +449,13 @@ class AutoForkOperations:
 
         subprocess.run(
             ["git", "commit", "-m", commit_msg],
+            cwd=config_work_dir,
             check=True,
             capture_output=True,
         )
 
         logger.info(f"Committed changes to branch {branch_name}")
         logger.info(f"Working directory: {config_work_dir}")
-        logger.info("Next: use push-and-pr skill to create PR")
 
     def update_and_commit(self) -> OperationResult:
         """
@@ -482,8 +486,8 @@ class AutoForkOperations:
             )
 
         try:
-            self._update_config_file()
             branch_name, config_work_dir = self._create_feature_branch()
+            self._update_config_file()
             self._commit_changes(branch_name, config_work_dir)
 
             return OperationResult(
@@ -571,8 +575,18 @@ def main():
         sys.exit(1)
     else:
         if not args.dry_run and results and results[-1].status == OperationStatus.SUCCESS:
-            logger.info("\nChanges committed successfully!")
-            logger.info("Next step: cd to the working directory and use push-and-pr skill to create PR")
+            # Extract working directory from last result
+            last_result = results[-1]
+            working_dir = last_result.details.get("working_dir", "") if last_result.details else ""
+
+            logger.info("\n" + "=" * 60)
+            logger.info("✓ Changes committed successfully!")
+            logger.info("=" * 60)
+            logger.info("\nREQUIRED NEXT STEP:")
+            logger.info(f"  cd {working_dir}")
+            logger.info("  Then invoke /push-and-pr skill to create PR")
+            logger.info("\nWARNING: Without pushing PR, changes will be lost on pod restart!")
+            logger.info("=" * 60)
         sys.exit(0)
 
 

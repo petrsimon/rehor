@@ -12,19 +12,30 @@ allowed-tools:
   - Skill
 ---
 
-Detect repos without forks and automatically fork + update config:
+Two-step workflow (both steps REQUIRED):
+
+**Step 1: Fork and commit**
 
 ```bash
 python3 .claude/skills/auto-fork/auto_fork.py 2>&1
 ```
 
-The script executes these operations:
-
+Script operations:
 1. **detect_unforkable_repos** - Scan project-repos.json for repos needing forks
 2. **fork_repos** - Create forks using `gh repo fork` (GitHub) or `glab repo fork` (GitLab)
-3. **update_and_commit** - Update project-repos.json with new fork URLs and commit changes
+3. **update_and_commit** - Update project-repos.json with fork URLs, create branch, commit changes
 
-After this completes successfully, use the **push-and-pr** skill to push and create PR.
+Script outputs working directory path at end.
+
+**Step 2: Push and create PR (REQUIRED)**
+
+IMMEDIATELY after step 1 completes successfully, cd to working directory and invoke push-and-pr skill:
+
+```bash
+cd <working_dir_from_step_1_output>
+```
+
+Then invoke `/push-and-pr` skill. This creates PR to config repo. WITHOUT this step, local commit is lost on next pod restart (config repo re-cloned fresh each cycle).
 
 ## Configuration
 
@@ -43,9 +54,9 @@ Repos w/ `upstream` but `url` not matching bot account → need fork.
 
 ## Workflow
 
-1. Run auto-fork script to fork repos and commit changes
-2. Script creates branch `bot/auto-fork` (or `bot/auto-fork-{instance_id}`)
-3. Use push-and-pr skill to push branch and create PR to config repo
+1. Run auto-fork script to fork repos, create branch `bot/auto-fork[-{instance_id}]`, and commit changes
+2. Script outputs working directory
+3. **IMMEDIATELY** cd to working directory and invoke `/push-and-pr` skill (pushes branch + creates PR to config repo)
 
 ## Error Handling
 

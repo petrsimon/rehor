@@ -55,7 +55,10 @@ jobs:
         env:
           # Set required env vars for tests
           BOT_JIRA_EMAIL: test@example.com
-          BOT_GITHUB_USERNAME: test-bot
+          GH_USER_NAME: test-bot
+          GL_USER_NAME: test-bot
+          BOT_CONFIG_PATH: test-config
+          BOT_INSTANCE_ID: test-instance
           BOT_CONFIG_REPO: https://github.com/test/config.git
         run: |
           if [ -d tests ]; then
