@@ -4,11 +4,9 @@ import base64
 import json
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 # Mock claude_agent_sdk before importing bot modules
 _mock_sdk = ModuleType("claude_agent_sdk")

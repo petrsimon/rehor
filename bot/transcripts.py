@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -74,12 +74,10 @@ def record_transcript(
     is_error = getattr(result, "subtype", "") != "success"
     cycle_type = _resolve_cycle_type(ctx.work_type if ctx else None, is_error)
 
-    duration_ms = getattr(result, "duration_ms", 0)
+    duration_ms = getattr(result, "duration_ms", None) or 0
     now = datetime.now(timezone.utc)
     started_at = now
     if duration_ms:
-        from datetime import timedelta
-
         started_at = now - timedelta(milliseconds=duration_ms)
 
     body: dict = {
@@ -125,4 +123,4 @@ def record_transcript(
     try:
         httpx.post(CYCLE_RUNS_API, json=body, timeout=10.0)
     except Exception:
-        logger.debug("Failed to push cycle run to API (dashboard may be down)")
+        logger.warning("Failed to push cycle run to API", exc_info=True)
