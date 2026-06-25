@@ -7,6 +7,7 @@ PR comments, capacity. Groups by action bucket.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.parse
@@ -257,6 +258,16 @@ def enrich(task):
     repo = task.get("repo", "")
     meta = task.get("metadata") or {}
     prs_info = meta.get("prs", [])
+    if not prs_info:
+        for a in task.get("artifacts") or []:
+            if a.get("type") == "pull_request" and a.get("url"):
+                m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", a["url"])
+                if m:
+                    prs_info.append({"repo": m.group(1), "number": int(m.group(2)), "host": "github"})
+                    continue
+                m = re.search(r"gitlab[^/]*/([^/]+(?:/[^/]+)+)/-/merge_requests/(\d+)", a["url"])
+                if m:
+                    prs_info.append({"repo": m.group(1), "number": int(m.group(2)), "host": "gitlab"})
     if not prs_info and task.get("pr_number"):
         _, host = upstream_repo(repo)
         prs_info = [{"repo": repo, "number": task["pr_number"], "host": host}]
