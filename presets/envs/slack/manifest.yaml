@@ -7,5 +7,5 @@ provides:
     - slack-notify
 
 requires:
-  optional_env_vars:
+  env_vars:
     - SLACK_WEBHOOK_URL
