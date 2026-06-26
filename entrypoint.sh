@@ -194,7 +194,9 @@ CHROME_BIN=$(find "$PLAYWRIGHT_BROWSERS_PATH" -name chrome -type f | head -1)
 until curl -s http://127.0.0.1:9222/json/version > /dev/null 2>&1; do sleep 1; done
 
 # Run env preset entrypoint scripts (no-op until presets are extracted)
-for script in presets/envs/*/entrypoint.d/*.sh; do [ -f "$script" ] && bash "$script"; done
+shopt -s nullglob
+for script in presets/envs/*/entrypoint.d/*.sh; do bash "$script"; done
+shopt -u nullglob
 
 echo "Credentials configured. Chromium started. Starting bot with label: ${BOT_LABEL}"
 exec uv run dev-bot --label "$BOT_LABEL"
