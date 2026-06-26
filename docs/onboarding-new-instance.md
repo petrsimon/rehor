@@ -466,7 +466,7 @@ After deploying, verify in order:
 3. **Memory server reachable**: `oc exec <pod> -- curl -s http://devbot-memory-server:8080/health`
 4. **Executor reachable**: check logs for "Connected to executor at devbot-proxy:9090"
 5. **Config loaded**: check logs for remote config sync from `BOT_CONFIG_REPO`
-6. **Scale up**: set `BOT_REPLICAS: '1'` in deploy.yml, bump ref
+6. **Enable via schedule**: configure the KEDA cron scaler (see [Step 2b](#step-2b-scheduling-keda-cron-scaler)) to run during your team's working hours. Don't set `BOT_REPLICAS: '1'` permanently — use the schedule to avoid unnecessary token consumption on weekends and off-hours
 
 ---
 
