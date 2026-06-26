@@ -10,8 +10,7 @@ provides:
   mcp_servers:
     chrome-devtools:
       type: stdio
-      command: npx
-      args: ["-y", "chrome-devtools-mcp"]
+      command: chrome-devtools-mcp
   skills:
     - gh-release-upload
 
