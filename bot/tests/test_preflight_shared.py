@@ -179,7 +179,11 @@ def test_classify_gh_review_comment():
     pr = {
         "state": "OPEN",
         "reviews": [
-            {"state": "COMMENTED", "body": "This is a substantive review comment that is long enough", "author": {"login": "reviewer"}},
+            {
+                "state": "COMMENTED",
+                "body": "This is a substantive review comment that is long enough",
+                "author": {"login": "reviewer"},
+            },
         ],
     }
     state, issues = classify_gh(pr)
