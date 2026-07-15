@@ -91,6 +91,27 @@ Integrate with the [Fleet Engineering Agentic SDLC](https://github.com/OpenShift
 
 ---
 
+## 6. Model Customization & Cost Tiering
+
+Configure which AI models are used for different tasks and workflows, matching model capability to task complexity.
+
+**Why:** Not every task needs the most capable (and expensive) model. Status checks, label management, simple PR maintenance, and boilerplate generation can run on smaller, cheaper models without any quality loss. Reserving top-tier models for complex implementation work can significantly reduce per-instance cost while maintaining output quality where it matters.
+
+**Scope:**
+- **Per-workflow model configuration** — allow workflow presets to specify a default model tier. A maintenance-only workflow or a review-bot can default to a cheaper model than a full implementation workflow.
+- **Per-task model selection** — within a single session, use cheaper models for mechanical sub-tasks (status checks, formatting, label updates, commit message generation) and escalate to stronger models for design decisions, complex bug fixes, or multi-file refactors.
+- **Sub-agent model tiers** — when the main agent spawns sub-agents (e.g., for parallel research, file scanning, test generation), those sub-agents can run on cheaper models since they handle scoped, well-defined tasks.
+- **Model routing rules** — configurable rules in instance or workflow config that map task types to model tiers (e.g., `preflight: haiku`, `implementation: sonnet`, `architecture: opus`).
+- **Cost tracking per model tier** — break down token spend by model in instance metrics to measure savings and validate routing decisions.
+
+**Examples:**
+- A preflight check agent that just reads PR status and Jira state → cheapest available model
+- A sub-agent grepping for patterns across a repo → cheap model
+- The main loop deciding which ticket to work on → mid-tier model
+- Implementing a multi-file feature from a Jira story → top-tier model
+
+---
+
 ## Status
 
 | Item | Status |
@@ -100,3 +121,4 @@ Integrate with the [Fleet Engineering Agentic SDLC](https://github.com/OpenShift
 | Improvement Agent | Planned |
 | Workflow Presets | Planned (scrum-jira exists today) |
 | Agentic SDLC Integration | Planned |
+| Model Customization | Planned |
