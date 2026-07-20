@@ -27,6 +27,7 @@ from common import (
 )
 from jira_mcp import jira_call, jira_cleanup
 
+BOT_LABEL = os.environ.get("BOT_LABEL", "")
 BOT_JIRA_PROJECT = os.environ.get("BOT_JIRA_PROJECT", "")
 BOT_JIRA_EMAIL = os.environ.get("BOT_JIRA_EMAIL", "")
 BOT_KANBAN_STATUSES = os.environ.get("BOT_KANBAN_STATUSES", "New,Backlog,To Do")
@@ -152,10 +153,14 @@ def _get_candidates(repo_lookup):
     if not BOT_JIRA_PROJECT:
         print("ERR: BOT_JIRA_PROJECT not set", file=sys.stderr)
         return []
+    if not BOT_LABEL:
+        print("ERR: BOT_LABEL not set — cannot filter candidates", file=sys.stderr)
+        return []
 
     statuses = _parse_statuses()
     status_list = ", ".join(f'"{s}"' for s in statuses)
     extra = f" AND {BOT_KANBAN_JQL_EXTRA}" if BOT_KANBAN_JQL_EXTRA.strip() else ""
+    label_filter = f"AND labels = {BOT_LABEL} "
     candidates = []
     seen_keys = set()
 
@@ -172,7 +177,7 @@ def _get_candidates(repo_lookup):
 
     collect(
         f"project = {BOT_JIRA_PROJECT} AND status IN ({status_list}) "
-        f"AND assignee is EMPTY{extra} "
+        f"{label_filter}AND assignee is EMPTY{extra} "
         f"ORDER BY priority DESC, created ASC",
         "kanban/unassigned",
     )
@@ -180,7 +185,7 @@ def _get_candidates(repo_lookup):
     if len(candidates) < 10 and BOT_JIRA_EMAIL:
         collect(
             f"project = {BOT_JIRA_PROJECT} AND status IN ({status_list}) "
-            f'AND assignee = "{BOT_JIRA_EMAIL}"{extra} '
+            f'{label_filter}AND assignee = "{BOT_JIRA_EMAIL}"{extra} '
             f"ORDER BY priority DESC, created ASC",
             "kanban/bot-assigned",
         )
@@ -189,13 +194,14 @@ def _get_candidates(repo_lookup):
 
 
 def _get_investigation_candidates(repo_lookup):
-    if not BOT_JIRA_PROJECT:
+    if not BOT_JIRA_PROJECT or not BOT_LABEL:
         return []
     statuses = _parse_statuses()
     status_list = ", ".join(f'"{s}"' for s in statuses)
     extra = f" AND {BOT_KANBAN_JQL_EXTRA}" if BOT_KANBAN_JQL_EXTRA.strip() else ""
     issues = _jira_search(
-        f"project = {BOT_JIRA_PROJECT} AND labels = needs-investigation "
+        f"project = {BOT_JIRA_PROJECT} AND labels = {BOT_LABEL} "
+        f"AND labels = needs-investigation "
         f"AND assignee is EMPTY AND status IN ({status_list}){extra} "
         f"ORDER BY priority DESC, created ASC",
         limit=5,
@@ -214,7 +220,7 @@ def _fmt_candidate(c):
             lines.append(f"  repo_labels: {','.join(repo_labels)} (NO MATCH in project-repos.json)")
         else:
             lines.append("  repos: (no repo: label — agent determines repo from ticket content)")
-    other_labels = [label for label in c["labels"] if not label.startswith("repo:")]
+    other_labels = [label for label in c["labels"] if not label.startswith("repo:") and label != BOT_LABEL]
     if other_labels:
         lines.append(f"  labels: {','.join(other_labels)}")
     for lk in c["links"][:5]:
