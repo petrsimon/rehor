@@ -75,6 +75,7 @@ def _mock_tasks(active=None, done=None, paused=None):
 @pytest.fixture
 def env_vars(monkeypatch, tmp_path):
     monkeypatch.setattr("jira_kanban_preflight.INSTANCE_ID", "test-instance")
+    monkeypatch.setattr("jira_kanban_preflight.BOT_LABEL", "hcc-ai-lightspeed-core")
     monkeypatch.setattr("jira_kanban_preflight.BOT_JIRA_PROJECT", "LCORE")
     monkeypatch.setattr("jira_kanban_preflight.BOT_JIRA_EMAIL", "bot@test.com")
     monkeypatch.setattr("jira_kanban_preflight.BOT_KANBAN_STATUSES", "New,Backlog,To Do")
@@ -398,3 +399,59 @@ def test_custom_statuses_in_query(env_vars, monkeypatch):
     assert len(captured_jqls) >= 1
     assert '"Open"' in captured_jqls[0]
     assert '"Ready"' in captured_jqls[0]
+
+
+def test_bot_label_in_candidate_query(env_vars, monkeypatch):
+    """BOT_LABEL is used to filter candidates in JQL."""
+    captured_jqls = []
+
+    def mock_search(jql, limit=10):
+        captured_jqls.append(jql)
+        return []
+
+    monkeypatch.setattr("jira_kanban_preflight._jira_search", mock_search)
+
+    from jira_kanban_preflight import _get_candidates
+
+    _get_candidates({})
+
+    assert len(captured_jqls) >= 1
+    assert "labels = hcc-ai-lightspeed-core" in captured_jqls[0]
+
+
+def test_missing_bot_label_returns_empty(env_vars, monkeypatch):
+    """No BOT_LABEL → _get_candidates returns empty, no JQL fired."""
+    monkeypatch.setattr("jira_kanban_preflight.BOT_LABEL", "")
+    captured_jqls = []
+
+    def mock_search(jql, limit=10):
+        captured_jqls.append(jql)
+        return []
+
+    monkeypatch.setattr("jira_kanban_preflight._jira_search", mock_search)
+
+    from jira_kanban_preflight import _get_candidates
+
+    result = _get_candidates({})
+
+    assert result == []
+    assert len(captured_jqls) == 0
+
+
+def test_bot_label_in_investigation_query(env_vars, monkeypatch):
+    """BOT_LABEL is used to filter investigation candidates."""
+    captured_jqls = []
+
+    def mock_search(jql, limit=10):
+        captured_jqls.append(jql)
+        return []
+
+    monkeypatch.setattr("jira_kanban_preflight._jira_search", mock_search)
+
+    from jira_kanban_preflight import _get_investigation_candidates
+
+    _get_investigation_candidates({})
+
+    assert len(captured_jqls) == 1
+    assert "labels = hcc-ai-lightspeed-core" in captured_jqls[0]
+    assert "labels = needs-investigation" in captured_jqls[0]
