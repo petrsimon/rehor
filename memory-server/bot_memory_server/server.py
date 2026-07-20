@@ -41,12 +41,14 @@ from .tools.rag import register_rag_tools  # noqa: E402
 from .tools.slack import register_slack_tools  # noqa: E402
 from .tools.org_members import register_org_member_tools  # noqa: E402
 from .tools.cycles import register_cycle_tools  # noqa: E402
+from .tools.konflux import register_konflux_tools  # noqa: E402
 
 register_task_tools(mcp)
 register_rag_tools(mcp)
 register_slack_tools(mcp)
 register_org_member_tools(mcp)
 register_cycle_tools(mcp)
+register_konflux_tools(mcp)
 
 
 # Health check

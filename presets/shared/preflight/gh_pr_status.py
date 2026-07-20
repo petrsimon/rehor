@@ -84,9 +84,13 @@ def classify_gh(pr, last_addressed=""):
     if pr.get("mergeable") == "CONFLICTING":
         issues.append("conflict")
     checks = pr.get("statusCheckRollup") or []
-    failed = [c.get("name", "?") for c in checks if c.get("conclusion") == "FAILURE"]
+    failed_checks = [c for c in checks if c.get("conclusion") == "FAILURE"]
+    failed = [c.get("name", "?") for c in failed_checks]
     if failed:
         issues.append(f"ci_fail:{','.join(failed)}")
+        konflux_urls = [c.get("detailsUrl", "") for c in failed_checks if "pipelinerun" in c.get("detailsUrl", "")]
+        if konflux_urls:
+            issues.append(f"konflux_urls:{';'.join(konflux_urls)}")
     if pr.get("reviewDecision") == "CHANGES_REQUESTED":
         issues.append("changes_requested")
     last_prefix = last_addressed[:16] if last_addressed else ""
@@ -179,6 +183,10 @@ def fmt_task(enriched):
     for p in enriched["prs"]:
         issue_str = ",".join(p["issues"]) if p["issues"] else "clean"
         lines.append(f"  PR {p['repo']}#{p['num']} (github) state={p['state']} [{issue_str}]")
+        for issue in p["issues"]:
+            if issue.startswith("konflux_urls:"):
+                for url in issue.split(":", 1)[1].split(";"):
+                    lines.append(f"    konflux_details: {url}")
     last_addr = enriched["task"].get("last_addressed")
     if enriched["pr_comments"]:
         lines.append(fmt_comments(enriched["pr_comments"], "pr_comments", since=last_addr))
