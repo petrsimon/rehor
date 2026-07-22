@@ -31,7 +31,7 @@ Generates the full instance repo directory tree at `<output_dir>`.
   "workflow": "jira-sprint",
   "envs": ["node", "slack"],
   "bot_name": "devbot-myteam",
-  "bot_label": "hcc-ai-myteam",
+  "bot_label": "rehor-ai-myteam",
   "repos": [
     {
       "name": "my-frontend",
@@ -67,6 +67,7 @@ Generates the full instance repo directory tree at `<output_dir>`.
 ├── .gitmodules
 ├── deploy/
 │   └── template.yaml
+├── fork-manifest.json       ← used by /auto-fork --from-manifest
 ├── instance/
 │   └── <config_name>/
 │       └── agent/
@@ -81,6 +82,8 @@ Generates the full instance repo directory tree at `<output_dir>`.
 ├── setup.sh
 └── README.md
 ```
+
+The output JSON includes a `fork_manifest` field with the path to `fork-manifest.json`.
 
 **Note**: `.tekton/` pipeline files are NOT generated here. They are created by the Konflux UI after the Component is registered and must be merged separately.
 

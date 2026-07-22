@@ -122,34 +122,36 @@ def _gen_instance_yaml(req):
 
 
 def _gen_mcp_json():
-    return json.dumps(
-        {
-            "mcpServers": {
-                "mcp-atlassian": {
-                    "type": "http",
-                    "url": "${JIRA_MCP_URL}",
+    return (
+        json.dumps(
+            {
+                "mcpServers": {
+                    "mcp-atlassian": {
+                        "type": "http",
+                        "url": "${JIRA_MCP_URL}",
+                    }
                 }
-            }
-        },
-        indent=2,
-    ) + "\n"
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
 
 def _gen_setup_sh(instance_name):
     return (
-        '#!/bin/bash\nset -e\n\n'
+        "#!/bin/bash\nset -e\n\n"
         f'echo "{instance_name}" > /home/botuser/app/.instance-id\n\n'
-        '# Instance-specific packages and tools go here:\n'
-        '# dnf install -y --nodocs <package>\n'
-        '# pip3.12 install <package>\n'
-        '# npm install -g <package>\n\n'
+        "# Instance-specific packages and tools go here:\n"
+        "# dnf install -y --nodocs <package>\n"
+        "# pip3.12 install <package>\n"
+        "# npm install -g <package>\n\n"
         f'echo "Instance setup complete: {instance_name}"\n'
     )
 
 
 def _gen_claude_md(req):
     instance_name = req["instance_name"]
-    team_name = req.get("team_name", instance_name)
     repos = req.get("repos", [])
     tech_stacks = req.get("tech_stacks", [])
 
@@ -177,11 +179,7 @@ def _gen_claude_md(req):
 
 
 def _gen_gitmodules():
-    return (
-        '[submodule "dev-bot"]\n'
-        "\tpath = dev-bot\n"
-        "\turl = https://github.com/OpenShift-Fleet/rehor.git\n"
-    )
+    return '[submodule "dev-bot"]\n\tpath = dev-bot\n\turl = https://github.com/OpenShift-Fleet/rehor.git\n'
 
 
 def _gen_readme(instance_name, team_name):
@@ -225,11 +223,29 @@ def _workflow_env_vars(workflow):
     return "# No workflow-specific env vars"
 
 
+def _sso_env_vars(envs):
+    if "browser" in envs:
+        return (
+            "- name: SSO_USERNAME\n"
+            "            valueFrom:\n"
+            "              secretKeyRef:\n"
+            "                name: devbot-secrets\n"
+            "                key: e2e-username\n"
+            "          - name: SSO_PASSWORD\n"
+            "            valueFrom:\n"
+            "              secretKeyRef:\n"
+            "                name: devbot-secrets\n"
+            "                key: e2e-password"
+        )
+    return "# No SSO credentials (no browser env)"
+
+
 def _gen_deploy_template(req):
     instance_name = req["instance_name"]
-    config_name = req.get("config_name", req["instance_name"].replace("-agent-dev", "-config").replace("-ai-dev", "-config"))
+    default_config = req["instance_name"].replace("-agent-dev", "-config").replace("-ai-dev", "-config")
+    config_name = req.get("config_name", default_config)
     bot_name = req.get("bot_name", f"devbot-{config_name.removesuffix('-config')}")
-    bot_label = req.get("bot_label", f"hcc-ai-{config_name.removesuffix('-config')}")
+    bot_label = req.get("bot_label", f"rehor-ai-{config_name.removesuffix('-config')}")
     quay_image = f"quay.io/redhat-services-prod/REPLACE-WITH-KONFLUX-TENANT/{instance_name}"
     keda = req.get("keda_schedule", DEFAULT_KEDA)
     workflow = req.get("workflow", "jira-sprint")
@@ -254,12 +270,7 @@ def _gen_deploy_template(req):
             '  value: "false"\n'
         )
     elif workflow == "jira-kanban":
-        workflow_params = (
-            "- name: BOT_BOARD_ID\n"
-            '  value: ""\n'
-            "- name: BOT_JIRA_PROJECT\n"
-            '  value: ""\n'
-        )
+        workflow_params = '- name: BOT_BOARD_ID\n  value: ""\n- name: BOT_JIRA_PROJECT\n  value: ""\n'
 
     return f"""apiVersion: template.openshift.io/v1
 kind: Template
@@ -375,7 +386,7 @@ objects:
               secretKeyRef:
                 name: devbot-secrets
                 key: jira-email
-          {"- name: SSO_USERNAME" + chr(10) + "            valueFrom:" + chr(10) + "              secretKeyRef:" + chr(10) + "                name: devbot-secrets" + chr(10) + "                key: e2e-username" + chr(10) + "          - name: SSO_PASSWORD" + chr(10) + "            valueFrom:" + chr(10) + "              secretKeyRef:" + chr(10) + "                name: devbot-secrets" + chr(10) + "                key: e2e-password" if "browser" in envs else "# No SSO credentials (no browser env)"}
+          {_sso_env_vars(envs)}
           {_workflow_env_vars(workflow)}
           - name: BOT_INSTANCE_ID
             value: ${{BOT_INSTANCE_ID}}
@@ -481,9 +492,9 @@ objects:
     triggers:
     - type: cron
       metadata:
-        timezone: "{keda['timezone']}"
-        start: "{keda['start']}"
-        end: "{keda['end']}"
+        timezone: "{keda["timezone"]}"
+        start: "{keda["start"]}"
+        end: "{keda["end"]}"
         desiredReplicas: "1"
 """
 
@@ -493,7 +504,6 @@ def generate(req, output_dir):
     instance_name = req["instance_name"]
     config_name = req.get("config_name", instance_name.replace("-agent-dev", "-config").replace("-ai-dev", "-config"))
     team_name = req.get("team_name", instance_name)
-
     agent_dir = root / "instance" / config_name / "agent"
     deploy_dir = root / "deploy"
 
@@ -538,8 +548,20 @@ def generate(req, output_dir):
 
     (deploy_dir / "template.yaml").write_text(_gen_deploy_template(req))
 
+    github_org = req.get("github_org", "RedHatInsights")
+    manifest = {
+        "repos": [
+            {
+                "name": instance_name,
+                "upstream": f"https://github.com/{github_org}/{instance_name}",
+                "host": "github",
+            }
+        ]
+    }
+    (root / "fork-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
     files = sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
-    return {"output_dir": str(root), "files": files}
+    return {"output_dir": str(root), "files": files, "fork_manifest": str(root / "fork-manifest.json")}
 
 
 def main():

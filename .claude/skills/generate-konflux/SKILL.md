@@ -67,6 +67,14 @@ Writes files into the `<konflux_repo_path>` directory (a clone of `konflux-relea
 
 Same files as `add-namespace.sh create` would produce, generated as pure Python.
 
+## Upstream Script (preferred when available)
+
+The canonical tool is `add-namespace.sh` in the `konflux-release-data` repo. This Python generator
+produces the same output but as pure Python — no dependency on `yq`, `kubectl`, `kustomize`, or `tox`.
+
+**TODO**: When the executor container includes these tools, replace this generator with a wrapper
+that invokes `add-namespace.sh create` directly. Track in the container image requirements.
+
 ## Important Notes
 
 - The RPA uses the `rh-push-to-external-registry` pipeline (service/Quay push), NOT `rh-advisories` (product)

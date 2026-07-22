@@ -180,6 +180,105 @@ class AutoForkOperations:
         """
         return result.status in (OperationStatus.FAILED, OperationStatus.SKIPPED)
 
+    def load_manifest(self, manifest_path: str) -> OperationResult:
+        """
+        Load repos to fork from an external manifest file.
+
+        The manifest is produced by /generate-instance and scopes auto-fork
+        to only the repos listed — prevents arbitrary forking.
+
+        Args:
+            manifest_path: Path to fork-manifest.json
+
+        Returns:
+            OperationResult with list of repos from manifest
+        """
+        path = Path(manifest_path)
+        if not path.exists():
+            return OperationResult(
+                operation="load_manifest",
+                status=OperationStatus.FAILED,
+                message=f"Manifest not found: {manifest_path}",
+            )
+
+        try:
+            with open(path) as f:
+                manifest = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            return OperationResult(
+                operation="load_manifest",
+                status=OperationStatus.FAILED,
+                message=f"Failed to read manifest: {e}",
+            )
+
+        repos = manifest.get("repos", [])
+        if not repos:
+            return OperationResult(
+                operation="load_manifest",
+                status=OperationStatus.SKIPPED,
+                message="Manifest contains no repos",
+            )
+
+        repos_to_fork = []
+        for entry in repos:
+            name = entry.get("name")
+            upstream = entry.get("upstream")
+            host = entry.get("host", HOST_GITHUB)
+            if not name or not upstream:
+                logger.warning(f"Skipping manifest entry missing name or upstream: {entry}")
+                continue
+
+            parsed = urlparse(upstream)
+            if not parsed.scheme or parsed.hostname not in ("github.com", GITLAB_HOST):
+                logger.warning(f"Skipping repo with unsupported host: {upstream}")
+                continue
+
+            repos_to_fork.append(RepoInfo(name=name, upstream=upstream, current_url=None, host=host))
+
+        if not repos_to_fork:
+            return OperationResult(
+                operation="load_manifest",
+                status=OperationStatus.SKIPPED,
+                message="No valid repos in manifest after validation",
+            )
+
+        self.repos_to_fork = repos_to_fork
+        logger.info(f"Loaded {len(repos_to_fork)} repos from manifest:")
+        for repo in repos_to_fork:
+            logger.info(f"  - {repo.name} ({repo.host}): {repo.upstream}")
+
+        return OperationResult(
+            operation="load_manifest",
+            status=OperationStatus.SUCCESS,
+            message=f"Loaded {len(repos_to_fork)} repos from manifest",
+            details={"repos": [r.name for r in repos_to_fork]},
+        )
+
+    def execute_manifest_workflow(self, manifest_path: str) -> List[OperationResult]:
+        """
+        Fork repos listed in a manifest file. No config updates or PR creation.
+
+        Used by the onboarding workflow to fork the instance repo. The
+        scaffolding PR is a separate step handled by the bot afterward.
+
+        Args:
+            manifest_path: Path to fork-manifest.json
+
+        Returns:
+            List of operation results
+        """
+        results = []
+
+        result = self.load_manifest(manifest_path)
+        results.append(result)
+        if self._should_stop_workflow(result):
+            return results
+
+        result = self.fork_repos()
+        results.append(result)
+
+        return results
+
     def detect_unforkable_repos(self) -> OperationResult:
         """
         Scan project-repos.json for repos needing forks.
@@ -648,6 +747,12 @@ def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Auto-fork repos and update config")
     parser.add_argument("--dry-run", action="store_true", help="Log actions without executing")
+    parser.add_argument(
+        "--from-manifest",
+        metavar="PATH",
+        help="Fork repos listed in a manifest file (e.g. fork-manifest.json from /generate-instance). "
+        "Forks only — no project-repos.json update or PR creation.",
+    )
     args = parser.parse_args()
 
     logger.info("Starting auto-fork workflow...")
@@ -660,7 +765,11 @@ def main():
         logger.error(f"Configuration error: {e}")
         sys.exit(1)
 
-    results = ops.execute_workflow()
+    if args.from_manifest:
+        logger.info(f"Manifest mode: {args.from_manifest}")
+        results = ops.execute_manifest_workflow(args.from_manifest)
+    else:
+        results = ops.execute_workflow()
 
     # Print summary
     logger.info("\n=== Auto-Fork Workflow Results ===")
@@ -671,13 +780,18 @@ def main():
             for key, value in result.details.items():
                 logger.info(f"  {key}: {value}")
 
+    # JSON output for manifest mode (callers need the fork URLs)
+    if args.from_manifest:
+        failed = any(r.status == OperationStatus.FAILED for r in results)
+        print(json.dumps({"forked": ops.forked_repos or [], "failed": failed}))
+
     # Exit code
     if any(r.status == OperationStatus.FAILED for r in results):
         sys.exit(1)
     else:
         if not args.dry_run and results and results[-1].status == OperationStatus.SUCCESS:
             logger.info("\n" + "=" * 60)
-            logger.info("✓ Auto-fork workflow completed successfully!")
+            logger.info("Auto-fork workflow completed successfully!")
             logger.info("=" * 60)
         sys.exit(0)
 

@@ -9,8 +9,11 @@ ReleasePlan, RPA, constraints, and CODEOWNERS entries.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
+
+_SAFE_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 
 CLUSTER_SUFFIXES = {
     "kflux-prd-rh02": "kflux-prd-rh02.0fk9.p1",
@@ -48,12 +51,7 @@ def _admin_kustomization(tenant, quota_tier):
 def _rbac_yaml(tenant, role_suffix, cluster_role, users):
     subjects = ""
     if users:
-        subjects = "\n".join(
-            f"  - apiGroup: rbac.authorization.k8s.io\n"
-            f"    kind: User\n"
-            f"    name: {u}"
-            for u in users
-        )
+        subjects = "\n".join(f"  - apiGroup: rbac.authorization.k8s.io\n    kind: User\n    name: {u}" for u in users)
         subjects = f"subjects:\n{subjects}\n"
     else:
         subjects = "subjects: []\n"
@@ -104,7 +102,7 @@ def _component_yaml(component_name, app_name, source_url, dockerfile, default_br
         "kind: Component\n"
         "metadata:\n"
         "  annotations:\n"
-        "    build.appstudio.openshift.io/pipeline: '{\"name\":\"docker-build\",\"bundle\":\"latest\"}'\n"
+        '    build.appstudio.openshift.io/pipeline: \'{"name":"docker-build","bundle":"latest"}\'\n'
         "    build.appstudio.openshift.io/request: configure-pac\n"
         f"  name: {component_name}\n"
         "spec:\n"
@@ -182,7 +180,7 @@ def _rpa_yaml(service_name, component_name, app_name, tenant, quay_org):
         "kind: ReleasePlanAdmission\n"
         "metadata:\n"
         "  labels:\n"
-        '    pp.engineering.redhat.com/business-unit: unknown\n'
+        "    pp.engineering.redhat.com/business-unit: unknown\n"
         '    release.appstudio.openshift.io/block-releases: "false"\n'
         f"  name: {service_name}\n"
         "  namespace: rhtap-releng-tenant\n"
@@ -228,6 +226,9 @@ def _rpa_yaml(service_name, component_name, app_name, tenant, quay_org):
 
 
 def _constraints_yaml(service_name, tenant, quay_org):
+    tenant_re = re.escape(tenant)
+    quay_org_re = re.escape(quay_org)
+    service_re = re.escape(service_name)
     return (
         "---\n"
         "properties:\n"
@@ -235,7 +236,7 @@ def _constraints_yaml(service_name, tenant, quay_org):
         "    properties:\n"
         "      origin:\n"
         "        type: string\n"
-        f"        pattern: {tenant}\n"
+        f"        pattern: ^{tenant_re}$\n"
         "      policy:\n"
         "        pattern: ^app-interface-standard$\n"
         "      data:\n"
@@ -252,7 +253,7 @@ def _constraints_yaml(service_name, tenant, quay_org):
         "                        properties:\n"
         "                          url:\n"
         "                            type: string\n"
-        f"                            pattern: ^quay.io/redhat-services-prod/{quay_org}/{service_name}*\n"
+        f"                            pattern: ^quay\\.io/redhat-services-prod/{quay_org_re}/{service_re}.*\n"
         "      pipeline:\n"
         "        properties:\n"
         "          pipelineRef:\n"
@@ -276,7 +277,9 @@ def _constraints_yaml(service_name, tenant, quay_org):
         "                        name:\n"
         "                          pattern: pathInRepo\n"
         "                        value:\n"
-        "                          pattern: pipelines/managed/rh-push-to-external-registry/rh-push-to-external-registry.yaml\n"
+        "                          pattern: pipelines/managed/"
+        "rh-push-to-external-registry/"
+        "rh-push-to-external-registry.yaml\n"
         "          serviceAccountName:\n"
         "            pattern: release-app-interface-((staging)|(prod))\n"
     )
@@ -306,6 +309,11 @@ def _update_codeowners(repo_path, tenant, cluster, cluster_suffix, service_name)
     codeowners_path.write_text("\n".join(existing_lines) + "\n")
 
 
+def _validate_name(value, field):
+    if not _SAFE_NAME.match(value):
+        raise ValueError(f"Invalid {field}: {value!r} — must match [a-zA-Z0-9._-]")
+
+
 def generate(cfg, repo_path):
     root = Path(repo_path)
     tenant = cfg["tenant"]
@@ -314,6 +322,14 @@ def generate(cfg, repo_path):
     app_name = cfg["app_name"]
     component_name = cfg.get("component_name", app_name)
     source_url = cfg["source_url"]
+
+    for name, field in [
+        (tenant, "tenant"),
+        (cluster, "cluster"),
+        (app_name, "app_name"),
+        (component_name, "component_name"),
+    ]:
+        _validate_name(name, field)
     dockerfile = cfg.get("dockerfile", "dev-bot/Dockerfile.runner")
     default_branch = cfg.get("default_branch", "master")
     admins = cfg.get("admins", [])
@@ -324,6 +340,9 @@ def generate(cfg, repo_path):
     service_name = cfg.get("service_name", app_name)
     new_tenant = cfg.get("new_tenant", True)
 
+    for name, field in [(quay_org, "quay_org"), (service_name, "service_name")]:
+        _validate_name(name, field)
+
     files_written = []
 
     if new_tenant:
@@ -331,16 +350,16 @@ def generate(cfg, repo_path):
         admin_dir.mkdir(parents=True, exist_ok=True)
         (admin_dir / "ns.yaml").write_text(_ns_yaml(tenant, cost_center))
         (admin_dir / "kustomization.yaml").write_text(_admin_kustomization(tenant, quota_tier))
-        files_written.extend([
-            str((admin_dir / "ns.yaml").relative_to(root)),
-            str((admin_dir / "kustomization.yaml").relative_to(root)),
-        ])
+        files_written.extend(
+            [
+                str((admin_dir / "ns.yaml").relative_to(root)),
+                str((admin_dir / "kustomization.yaml").relative_to(root)),
+            ]
+        )
 
         tenant_dir = root / "tenants-config" / "cluster" / cluster / "tenants" / tenant
         tenant_dir.mkdir(parents=True, exist_ok=True)
-        (tenant_dir / "rbac-admins.yaml").write_text(
-            _rbac_yaml(tenant, "admins", "konflux-admin-user-actions", admins)
-        )
+        (tenant_dir / "rbac-admins.yaml").write_text(_rbac_yaml(tenant, "admins", "konflux-admin-user-actions", admins))
         (tenant_dir / "rbac-maintainers.yaml").write_text(
             _rbac_yaml(tenant, "maintainers", "konflux-maintainer-user-actions", maintainers)
         )
@@ -348,17 +367,22 @@ def generate(cfg, repo_path):
             _rbac_yaml(tenant, "contributors", "konflux-contributor-user-actions", [])
         )
         (tenant_dir / "kustomization.yaml").write_text(
-            _tenant_kustomization(tenant, [
-                "rbac-admins.yaml",
-                "rbac-contributors.yaml",
-                "rbac-maintainers.yaml",
-            ], [app_name])
+            _tenant_kustomization(
+                tenant,
+                [
+                    "rbac-admins.yaml",
+                    "rbac-contributors.yaml",
+                    "rbac-maintainers.yaml",
+                ],
+                [app_name],
+            )
         )
-        files_written.extend([
-            str((tenant_dir / f).relative_to(root))
-            for f in ["rbac-admins.yaml", "rbac-maintainers.yaml",
-                       "rbac-contributors.yaml", "kustomization.yaml"]
-        ])
+        files_written.extend(
+            [
+                str((tenant_dir / f).relative_to(root))
+                for f in ["rbac-admins.yaml", "rbac-maintainers.yaml", "rbac-contributors.yaml", "kustomization.yaml"]
+            ]
+        )
 
     app_dir = root / "tenants-config" / "cluster" / cluster / "tenants" / tenant / app_name
     comp_dir = app_dir / component_name
@@ -370,30 +394,20 @@ def generate(cfg, repo_path):
     (comp_dir / "component.yaml").write_text(
         _component_yaml(component_name, app_name, source_url, dockerfile, default_branch)
     )
-    (comp_dir / "image-repository.yaml").write_text(
-        _image_repository_yaml(component_name, app_name, tenant)
+    (comp_dir / "image-repository.yaml").write_text(_image_repository_yaml(component_name, app_name, tenant))
+    files_written.extend(
+        [str((app_dir / f).relative_to(root)) for f in ["application.yaml", "release-plan.yaml", "kustomization.yaml"]]
     )
-    files_written.extend([
-        str((app_dir / f).relative_to(root))
-        for f in ["application.yaml", "release-plan.yaml", "kustomization.yaml"]
-    ])
-    files_written.extend([
-        str((comp_dir / f).relative_to(root))
-        for f in ["component.yaml", "image-repository.yaml"]
-    ])
+    files_written.extend([str((comp_dir / f).relative_to(root)) for f in ["component.yaml", "image-repository.yaml"]])
 
     rpa_dir = root / "config" / cluster_suffix / "service" / "ReleasePlanAdmission" / service_name
     rpa_dir.mkdir(parents=True, exist_ok=True)
-    (rpa_dir / f"{component_name}.yaml").write_text(
-        _rpa_yaml(service_name, component_name, app_name, tenant, quay_org)
-    )
+    (rpa_dir / f"{component_name}.yaml").write_text(_rpa_yaml(service_name, component_name, app_name, tenant, quay_org))
     files_written.append(str((rpa_dir / f"{component_name}.yaml").relative_to(root)))
 
     constraints_dir = root / "constraints" / "service"
     constraints_dir.mkdir(parents=True, exist_ok=True)
-    (constraints_dir / f"{service_name}.yaml").write_text(
-        _constraints_yaml(service_name, tenant, quay_org)
-    )
+    (constraints_dir / f"{service_name}.yaml").write_text(_constraints_yaml(service_name, tenant, quay_org))
     files_written.append(str((constraints_dir / f"{service_name}.yaml").relative_to(root)))
 
     _update_codeowners(repo_path, tenant, cluster, cluster_suffix, service_name)

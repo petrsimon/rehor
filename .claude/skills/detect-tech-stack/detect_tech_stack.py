@@ -124,8 +124,10 @@ def detect(repo_path):
             break
 
     has_dockerfile = any(root.glob("Dockerfile*"))
-    has_app_code = bool(pkg_json) or (root / "go.mod").exists() or any(
-        (root / f).exists() for f in ("Pipfile", "requirements.txt", "pyproject.toml")
+    has_app_code = (
+        bool(pkg_json)
+        or (root / "go.mod").exists()
+        or any((root / f).exists() for f in ("Pipfile", "requirements.txt", "pyproject.toml"))
     )
 
     if has_dockerfile and not has_app_code:
@@ -138,13 +140,24 @@ def detect(repo_path):
         stack.append("config")
         personas.add("config")
 
+    unsupported = []
+    if (root / "pom.xml").exists() or (root / "build.gradle").exists():
+        stack.append("java")
+        unsupported.append("java")
+    if (root / "Cargo.toml").exists():
+        stack.append("rust")
+        unsupported.append("rust")
+    if (root / "Gemfile").exists():
+        stack.append("ruby")
+        unsupported.append("ruby")
+
     if not personas:
         if has_app_code:
             personas.add("backend")
         else:
             personas.add("tooling")
 
-    return {
+    result = {
         "stack": list(dict.fromkeys(stack)),
         "envs": sorted(envs),
         "personas": sorted(personas),
@@ -152,6 +165,12 @@ def detect(repo_path):
         "has_dockerfile": has_dockerfile,
         "visibility": _detect_visibility(repo_path),
     }
+
+    if unsupported:
+        result["unsupported_stacks"] = unsupported
+        result["needs_team_review"] = True
+
+    return result
 
 
 def main():

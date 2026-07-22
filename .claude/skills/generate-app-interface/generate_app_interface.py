@@ -25,7 +25,7 @@ def _build_resource_template(cfg):
     instance_name = cfg["instance_name"]
     config_name = cfg.get("config_name", instance_name.replace("-agent-dev", "-config").replace("-ai-dev", "-config"))
     bot_name = cfg.get("bot_name", f"devbot-{config_name.removesuffix('-config')}")
-    bot_label = cfg.get("bot_label", f"hcc-ai-{config_name.removesuffix('-config')}")
+    bot_label = cfg.get("bot_label", f"rehor-ai-{config_name.removesuffix('-config')}")
     instance_id = cfg.get("instance_id", instance_name)
     repo_url = cfg["repo_url"]
     quay_org = cfg["quay_org"]
@@ -51,11 +51,13 @@ def _build_resource_template(cfg):
         board_name = cfg.get("board_name", "")
         sprint_prefix = cfg.get("sprint_prefix", "")
         include_backlog = cfg.get("include_backlog", "false")
-        params.extend([
-            f"          BOT_BOARD_NAME: {board_name}",
-            f"          BOT_SPRINT_PREFIX: {sprint_prefix}",
-            f"          BOT_INCLUDE_BACKLOG: '{include_backlog}'",
-        ])
+        params.extend(
+            [
+                f"          BOT_BOARD_NAME: {board_name}",
+                f"          BOT_SPRINT_PREFIX: {sprint_prefix}",
+                f"          BOT_INCLUDE_BACKLOG: '{include_backlog}'",
+            ]
+        )
     elif workflow == "jira-kanban":
         board_id = cfg.get("board_id", "")
         jira_project = cfg.get("jira_project", "")
@@ -105,7 +107,7 @@ def _modify_shared_saas(cfg, repo_path):
         idx = content.find(image_patterns_marker)
         if idx >= 0:
             end_of_line = content.find("\n", idx)
-            content = content[:end_of_line + 1] + image_pattern + "\n" + content[end_of_line + 1:]
+            content = content[: end_of_line + 1] + image_pattern + "\n" + content[end_of_line + 1 :]
 
     resource_template = _build_resource_template(cfg)
     content = content.rstrip() + "\n" + resource_template + "\n"
@@ -139,7 +141,7 @@ labels:
 
 name: {instance_name}
 displayName: {instance_name}
-description: Rehor bot instance for {cfg.get('team_name', instance_name)}
+description: Rehor bot instance for {cfg.get("team_name", instance_name)}
 
 app:
   $ref: {APP_REF}

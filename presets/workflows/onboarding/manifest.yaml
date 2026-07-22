@@ -3,19 +3,25 @@ type: workflow
 description: Onboard new teams to their own Rehor bot instance
 
 preflight:
-  - 01-onboarding-jira.py
+  - 01-gh-pr-status.py
+  - 02-gl-mr-status.py
+  - 03-onboarding-jira.py
 
 shared_skills:
   - push-and-pr
   - auto-fork
-
-provides:
-  claude_md: CLAUDE.md
-  skills:
-    - generate-instance
-    - generate-konflux
-    - generate-app-interface
-    - detect-tech-stack
+  - generate-instance
+  - generate-konflux
+  - generate-app-interface
+  - detect-tech-stack
+  - create-phase-tickets
+  - claim-onboarding
+  - post-intake
+  - post-plan
+  - post-konflux-questions
+  - post-konflux-instructions
+  - post-deployment-confirmation
+  - post-manual-steps
 
 requires:
   mcp_servers:

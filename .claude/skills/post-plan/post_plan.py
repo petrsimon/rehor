@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Post the onboarding plan comment for team approval.
+
+Usage:
+    python3 post_plan.py '<json_config>'
+"""
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from jira_mcp import jira_cleanup
+from onboarding_helpers import apply_label, post_comment
+
+LABEL = "onboarding:plan-posted"
+
+
+def _build_comment(config):
+    instance_name = config.get("instance_name", "?")
+    bot_name = config.get("bot_name", "?")
+    bot_label = config.get("bot_label", "?")
+    workflow = config.get("workflow", "jira-sprint")
+    repos = config.get("repos", [])
+    envs_and_personas = config.get("envs_and_personas", "auto-detected")
+
+    tech_stacks = config.get("tech_stacks", {})
+    stack_lines = []
+    for repo_name, info in tech_stacks.items():
+        stack = ", ".join(info.get("stack", [])) if isinstance(info, dict) else str(info)
+        stack_lines.append(f"  - **{repo_name}**: {stack}")
+    stacks_str = "\n".join(stack_lines) if stack_lines else "  (none detected)"
+
+    unsupported_warning = ""
+    for repo_name, info in tech_stacks.items():
+        if isinstance(info, dict) and info.get("unsupported_stacks"):
+            unsupported = ", ".join(info["unsupported_stacks"])
+            unsupported_warning += (
+                f"\n> **Note**: {repo_name} uses {unsupported} which is not yet "
+                f"supported by Rehor. The Rehor team has been notified and will "
+                f"follow up with env preset support.\n"
+            )
+
+    repo_list = "\n".join(f"  - {r}" for r in repos) if repos else "  (none)"
+
+    return f"""\
+## [Phase 1/3] Instance Setup — Onboarding Plan
+
+Based on our conversation, here's the plan:
+
+### Instance Configuration
+- **Instance name**: {instance_name}
+- **Bot name**: {bot_name}
+- **Bot label**: {bot_label}
+- **Workflow**: {workflow}
+- **Target repos**:
+{repo_list}
+- **Detected stacks**:
+{stacks_str}
+- **Suggested presets**: {envs_and_personas}
+{unsupported_warning}
+### What I'll automate
+- Phase 1: Generate scaffolding files, open PR on your instance repo
+- Phase 2: Open Konflux MR for CI/CD registration
+- Phase 3: Open app-interface MR for deployment
+
+### What you'll need to do
+- Phase 1: Create the GitHub repo, grant bot access, merge scaffolding PR
+- Phase 2: Merge Konflux MR, generate Tekton pipelines from UI, verify Quay image
+- Phase 3: Merge app-interface MR, verify deployment
+
+**Does this look good?** Reply "approved" or let me know what to change.
+"""
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: post_plan.py '<json_config>'", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        config = json.loads(sys.argv[1])
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Invalid JSON: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    epic_key = config.get("epic_key")
+    if not epic_key:
+        print("ERROR: epic_key is required", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        comment = _build_comment(config)
+        ok = post_comment(epic_key, comment)
+        if not ok:
+            sys.exit(1)
+
+        apply_label(epic_key, LABEL)
+
+        print(json.dumps({"epic_key": epic_key, "label": LABEL, "posted": True}))
+    finally:
+        jira_cleanup()
+
+
+if __name__ == "__main__":
+    main()

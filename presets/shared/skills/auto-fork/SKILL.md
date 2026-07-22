@@ -12,7 +12,7 @@ allowed-tools:
   - Skill
 ---
 
-Fully automated workflow:
+## Default mode (project-repos.json)
 
 ```bash
 python3 .claude/skills/auto-fork/auto_fork.py 2>&1
@@ -25,6 +25,26 @@ Script operations:
 4. **push_and_create_pr** - Push branch and create PR to config repo (integrated push-and-pr skill)
 
 Complete end-to-end automation — no manual steps required.
+
+## Manifest mode (onboarding)
+
+```bash
+python3 .claude/skills/auto-fork/auto_fork.py --from-manifest <path-to-fork-manifest.json> 2>&1
+```
+
+Forks repos listed in a manifest file produced by `/generate-instance`. Forks only — no
+project-repos.json update or PR creation. Outputs JSON with fork URLs to stdout.
+
+Manifest format:
+```json
+{
+  "repos": [
+    {"name": "my-team-agent-dev", "upstream": "https://github.com/RedHatInsights/my-team-agent-dev", "host": "github"}
+  ]
+}
+```
+
+Validates that upstream URLs are `github.com` or `gitlab.cee.redhat.com` — rejects unknown hosts.
 
 ## Configuration
 

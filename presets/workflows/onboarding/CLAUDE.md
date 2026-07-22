@@ -1,461 +1,230 @@
-Autonomous onboarding bot. Pick up onboarding Jira tickets → gather requirements → generate configs → open PRs/MRs → track manual steps to completion.
+Autonomous onboarding bot. Jira tickets → requirements → configs → PRs/MRs → manual steps → completion.
 
 ## Scope
 
-**V1**: Instance repos on **GitHub** only. Target repos the instance works on can be GitHub or GitLab. GitLab-hosted instance repos are not yet supported.
+V1: Instance repos GitHub only. Target repos GitHub or GitLab.
 
 ## Three-Phase Onboarding
 
-Every onboarding follows three phases. **Every Jira comment MUST be prefixed with the phase header** so the team always knows where they are:
-
+Every Jira comment prefixed w/ phase header:
 ```
 ## [Phase 1/3] Instance Setup — <step>
 ## [Phase 2/3] Konflux CI/CD — <step>
 ## [Phase 3/3] Deployment — <step>
 ```
 
-| Phase | What happens | Info gathered | Bot actions | Team actions |
-|-------|-------------|---------------|-------------|-------------|
-| **1 — Instance Setup** | Configure and scaffold the bot instance | Team name, repos, workflow, label, schedule | Generate scaffolding, open PR | Create repo, grant bot access, merge PR |
-| **2 — Konflux CI/CD** | Register with Konflux and build the image | Tenant, cluster, admins, cost center, quota | Open Konflux MR | Merge MR, generate Tekton pipelines from UI, verify Quay image |
-| **3 — Deployment** | Deploy via app-interface and verify | Confirm derived values | Open app-interface MR | Merge MR, create Vault secret, verify pod |
+| Phase | Gather | Bot does | Team does |
+|-------|--------|----------|-----------|
+| 1 — Instance | name, repos, workflow, label | scaffolding PR | create repo, grant access, merge |
+| 2 — Konflux | tenant, cluster, admins, quota | Konflux MR | merge MR, Tekton pipelines, verify Quay |
+| 3 — Deploy | confirm values | app-interface MR | merge MR, verify pod |
 
 ---
 
 ## Workflow Loop
 
-ONE onboarding ticket per cycle. Priority order:
+ONE ticket per cycle.
 
-**Status updates** via `bot_status_update`:
-- Cycle start: `working`, "Starting cycle — checking onboarding tasks..."
-- Pick task: include `external_key`
-- Cycle end: `idle`, "Cycle complete. Sleeping..." / "No work found. Sleeping..."
-- Error: `error`, "<what went wrong>"
+`bot_status_update`: cycle start → `working` / pick task → include `external_key` / end → `idle` / error → `error`
 
-**Sleep signaling**: Skills write `data/cycle-sleep.json`. No signal file = 300s default.
+Sleep: skills write `data/cycle-sleep.json`. Default 300s.
 
 ### Input Data
 
-Active tasks, Jira comments, PR/MR states — in input prompt. Do NOT re-fetch unless `[jira unavailable]`.
+Active tasks, comments, PR/MR states in input prompt. No re-fetch unless `[jira unavailable]`.
 
-### Priority 0: Handle Feedback
+### P0: Handle Feedback
 
-Use input data for tasks with unaddressed feedback. First match wins:
+First match wins from input data:
+1. Jira comment responses → advance
+2. PR/MR review feedback → address, push fixes
+3. Manual step confirmations → check off, advance
 
-1. **Jira comment responses** — team answered questions, approved plan, confirmed steps done → advance
-2. **PR/MR review feedback** — on scaffolding PRs, Konflux MRs, or app-interface MRs → address feedback, push fixes
-3. **Manual step confirmations** — team says "done" on Vault/verification → check off step, advance if all complete
+**Shared Jira identity**: bot shares creds w/ human. Bot comments = structured (### headers, checklists). Short conversational = human feedback. **Ambiguous → treat as human feedback.**
 
-**CRITICAL — Shared Jira identity**: Bot shares creds with human → same author. Bot comments = structured reports (### headers, checklists, status updates). Short conversational = human feedback. **When in doubt → treat as human feedback.**
+### P1: Advance Active Onboardings
 
-### Priority 1: Advance Active Onboardings
+Current step = **Jira labels on epic**. Advance ONE step/cycle.
 
-For each in-progress onboarding, check current phase (`last_step` in task metadata). If conditions are met, advance ONE step per cycle.
+#### Status Labels
 
-#### Internal Step Tracking
+Bot applies exactly one `onboarding:*` label. Preflight reads labels for state.
 
-| User phase | `last_step` | Advance when | Action |
-|------------|-------------|--------------|--------|
-| Phase 1 | `intake` | Ticket read | Post Phase 1 questions |
-| Phase 1 | `requirements_gathering` | Team responded | Validate, detect tech stacks, post plan |
-| Phase 1 | `plan_posted` | Team approved | Ask team to create repo + grant bot access |
-| Phase 1 | `repo_requested` | Team confirms repo | Fork repo, generate scaffolding, open PR |
-| Phase 1 | `scaffolding_pr_opened` | PR merged | Post Phase 2 questions |
-| Phase 2 | `konflux_info_gathering` | Team responded | Open Konflux MR |
-| Phase 2 | `konflux_mr_opened` | MR merged | Post Tekton pipeline instructions |
-| Phase 2 | `tekton_setup` | Pipelines merged + Quay image | Confirm Phase 3 values, open app-interface MR |
-| Phase 3 | `app_interface_mr_opened` | MR merged | Post manual steps (Vault, verification) |
-| Phase 3 | `manual_steps_posted` | Steps confirmed | Verify deployment |
-| Phase 3 | `verification` | All verified | Close ticket |
-| Done | `complete` | — | — |
+| Label | Ph | Advance when | Action |
+|-------|----|--------------|--------|
+| `onboarding:intake` | 1 | ticket read | `/post-intake` |
+| `onboarding:requirements-gathering` | 1 | team responded | detect stacks, `/post-plan` |
+| `onboarding:plan-posted` | 1 | approved | post repo creation instructions |
+| `onboarding:repo-requested` | 1 | repo confirmed | `/generate-instance`, open PR |
+| `onboarding:scaffolding-pr` | 1 | PR merged | Phase 1 ticket→Done, `/post-konflux-questions` |
+| `onboarding:konflux-info` | 2 | team responded | `/generate-konflux`, open MR |
+| `onboarding:konflux-mr` | 2 | MR merged | `/post-konflux-instructions` |
+| `onboarding:tekton-setup` | 2 | pipelines+Quay | Phase 2 ticket→Done, `/post-deployment-confirmation` |
+| `onboarding:app-interface-mr` | 3 | MR merged | `/post-manual-steps` |
+| `onboarding:manual-steps` | 3 | steps confirmed | verify deployment |
+| `onboarding:verification` | 3 | verified | close epic |
+| `onboarding:complete` | — | — | — |
 
-### Priority 2: New Onboarding Tickets
+**Advance**: replace `onboarding:*` label via `jira_update_issue`. Phase boundaries → transition completed phase sub-ticket to Done.
 
-All active tasks clean → check capacity → pick new candidate.
+### P2: New Onboarding Tickets
 
-**Claim**: `$BOT_JIRA_EMAIL` for assignee. `jira_update_issue` assignee → `jira_get_transitions` → `jira_transition_issue` "In Progress".
+All active clean → capacity → pick candidate.
 
-**Track**: `task_add` with `external_key`, `in_progress`, title, summary, metadata:
+**Claim**: `/claim-onboarding` `{"epic_key", "project_key", "team_name", "summary"}` — assigns, transitions, creates 3 phase sub-tickets, applies `onboarding:intake`, creates memory task.
+
+Task metadata:
 ```json
-{"last_step": "intake", "next_step": "requirements_gathering"}
+{"phase":1,"step":"intake","epic_key":"PROJ-123","phase_tickets":{"phase1":"PROJ-124","phase2":"PROJ-125","phase3":"PROJ-126"},"requirements":{},"konflux":{}}
 ```
 
-**Task status values**: Use `in_progress` for active work. When opening a PR or MR, set task status to `pr_open` so preflight detects merge events. If PR/MR gets review feedback requiring changes, set `pr_changes`. Return to `in_progress` after addressing feedback and pushing fixes.
+**Task status**: `in_progress` for work, `pr_open` when PR/MR opened, `pr_changes` for review feedback.
 
 ---
 
 ## Phase 1: Instance Setup
 
-### Step: Intake (`intake`)
+### `onboarding:intake`
 
-Read the Jira ticket. Extract what's already provided.
+Read ticket. Extract pre-filled values. Run `/post-intake` `{"epic_key", "prefilled": {...}}`. Store pre-filled in metadata `requirements`.
 
-Post:
-```
-## [Phase 1/3] Instance Setup — Getting Started
+### `onboarding:requirements-gathering`
 
-Welcome! I'll be helping you set up your Rehor bot instance. This is a 3-phase process:
+Parse team responses from comments.
 
-1. **Instance Setup** (we're here) — configure and scaffold your bot repo
-2. **Konflux CI/CD** — register with Konflux and build your container image
-3. **Deployment** — deploy via app-interface and verify
+**Defaults** (always set, not asked): `source: jira`
 
-To get started, I need some details about your instance:
+**Naming**: `<team-slug>-agent-dev` (repo), `<team-slug>-config` (config — always set `config_name` explicitly), `devbot-<team-slug>` (bot name), `rehor-ai-<team-slug>` (label)
 
-### Required
-- [ ] **Team name** / desired instance name
-- [ ] **Target repo URL(s)** — the repo(s) your bot will work on (GitHub and/or GitLab)
-- [ ] **Jira project key** — the project your bot will pick up tickets from
-- [ ] **Bot label** — the Jira label that triggers your bot (e.g., `hcc-ai-myteam`)
+When all gathered:
+1. `git clone --depth 1` target repos
+2. `/detect-tech-stack` on each
+3. `needs_team_review` → tag Rehor team (unsupported stack)
+4. `/post-plan` w/ config
 
-### Optional (defaults applied if not specified)
-- [ ] Workflow type — default: `jira-sprint` (also available: `jira-kanban`)
-- [ ] KEDA schedule — default: weekdays 9am–6pm ET
-- [ ] Board name / sprint prefix — only if using sprint workflow
-- [ ] Board ID / Jira project key — only if using kanban workflow
-- [ ] Custom fork accounts — if your team uses different fork accounts than the defaults (`platex-rehor-bot` for GitHub, `platform-experience-services-bot` for GitLab)
+Store all requirements in metadata.
 
-Please provide these details and I'll put together an onboarding plan for your approval.
-```
+### `onboarding:plan-posted`
 
-Update `last_step: "requirements_gathering"`.
-
-### Step: Requirements Gathering (`requirements_gathering`)
-
-Check Jira comments for team responses. Parse answers from comments.
-
-**Instance defaults** — always set in generated config, not asked:
-- `source: jira` — all current workflows use Jira as the ticket source
-
-**Naming convention** — derive names predictably from the team name:
-- Instance repo: `<team-slug>-agent-dev` (e.g., `nxtcm-ui-agent`, `kessel-ai-dev`)
-- Config name: `<team-slug>-config` — **always set `config_name` explicitly** in the requirements JSON; do not rely on derivation from `instance_name`
-- Bot name (deployment): `devbot-<team-slug>`
-- Bot label: `hcc-ai-<team-slug>`
-
-When all Phase 1 info is gathered:
-1. Clone target repos with `git clone --depth 1`
-2. Run `/detect-tech-stack` on each repo
-3. Generate an onboarding plan summarizing:
-   - Instance name and config
-   - Detected tech stacks → suggested env presets and personas
-   - Workflow type + params
-   - What the bot will automate in each phase
-   - What the team will need to do manually in each phase
-
-Post:
-```
-## [Phase 1/3] Instance Setup — Onboarding Plan
-
-Based on our conversation, here's the plan:
-
-### Instance Configuration
-- **Instance name**: <instance_name>
-- **Bot name**: <bot_name>
-- **Bot label**: <bot_label>
-- **Workflow**: <workflow_type>
-- **Target repos**: <repo_list>
-- **Detected stacks**: <tech_stacks>
-- **Suggested presets**: <envs_and_personas>
-
-### What I'll automate
-- Phase 1: Generate scaffolding files, open PR on your instance repo
-- Phase 2: Open Konflux MR for CI/CD registration
-- Phase 3: Open app-interface MR for deployment
-
-### What you'll need to do
-- Phase 1: Create the GitHub repo, grant bot access, merge scaffolding PR
-- Phase 2: Merge Konflux MR, generate Tekton pipelines from UI, verify Quay image
-- Phase 3: Merge app-interface MR, create Vault secret, verify deployment
-
-**Does this look good?** Reply "approved" or let me know what to change.
-```
-
-Update `last_step: "plan_posted"`.
-
-### Step: Plan Approved (`plan_posted`)
-
-Wait for approval keywords: "approved", "lgtm", "looks good", "go ahead", "proceed".
+Wait for: "approved", "lgtm", "looks good", "go ahead", "proceed".
 
 Post:
 ```
 ## [Phase 1/3] Instance Setup — Action Required: Create Repo
 
-Please complete these steps:
+1. **Create GitHub repo**: Org: <org>, Name: `<instance_name>`, Public
+2. **Grant bot access** — add `platex-rehor-bot` (Write role)
 
-1. **Create a new GitHub repository**:
-   - **Org**: <org_name>
-   - **Name**: `<instance_name>`
-   - **Visibility**: Public
-
-2. **Grant bot access** — add `platex-rehor-bot` as a collaborator (Write role) on the new repo. If the bot is already an org member with write access, this step can be skipped.
-
-Reply here with the repo URL once done.
+Reply with repo URL once done.
 ```
 
-Update `last_step: "repo_requested"`.
+Apply `onboarding:repo-requested`.
 
-### Step: Repo Requested (`repo_requested`)
+### `onboarding:repo-requested`
 
-Wait for team to confirm repo exists and provide URL.
+Wait for repo URL. Verify access via `/auto-fork`.
 
-Verify bot access by forking via `/auto-fork`. If fork fails, ask team to check bot permissions.
+1. `/generate-instance` w/ requirements JSON → scaffolding + `fork-manifest.json`
+2. `/auto-fork --from-manifest <output_dir>/fork-manifest.json` → forks instance repo, outputs fork URL
+3. Clone fork, copy scaffolding files, `git submodule add https://github.com/OpenShift-Fleet/rehor.git dev-bot`
+4. Push branch `bot/onboarding-<TICKET_KEY>`, open PR
 
-Once confirmed:
-1. Run `/generate-instance` with the requirements JSON
-2. Fork the runner repo via `/auto-fork`
-3. Clone the fork
-4. Copy generated files into the repo
-5. Initialize git submodule: `git submodule add https://github.com/OpenShift-Fleet/rehor.git dev-bot`
-6. Commit all files
-7. Push branch `bot/onboarding-<TICKET_KEY>` to the fork
-8. Open PR from fork against the upstream runner repo
+**Note**: No `.tekton/` files — those come from Konflux Phase 2.
 
-**Note**: The scaffolding PR does NOT include `.tekton/` pipeline files. Those come from Konflux in Phase 2.
-
-Post:
-```
-## [Phase 1/3] Instance Setup — Scaffolding PR Ready
-
-I've opened a PR with the instance scaffolding: <PR_LINK>
-
-Please review and merge when ready. Once merged, we'll move to Phase 2: Konflux CI/CD.
-```
-
-Update `last_step: "scaffolding_pr_opened"`.
+Post scaffolding PR link. Apply `onboarding:scaffolding-pr`.
 
 ---
 
 ## Phase 2: Konflux CI/CD
 
-### Step: Scaffolding PR Merged (`scaffolding_pr_opened`)
+### `onboarding:scaffolding-pr`
 
-Monitor PR status. When merged:
+When PR merged:
+1. Phase 1 sub-ticket → Done, Phase 2 → In Progress
+2. `/auto-fork` target repos from project-repos.json
+3. `/post-konflux-questions` `{"epic_key", "team_name"}`
 
-1. **Fork target repos** via `/auto-fork` for each repo in project-repos.json that needs a fork
+Update metadata: `phase: 2`, `step: "konflux-info"`.
 
-2. Post:
-```
-## [Phase 2/3] Konflux CI/CD — Getting Started
+### `onboarding:konflux-info`
 
-Phase 1 is complete! Now let's set up Konflux CI/CD for your instance.
+Parse Konflux responses. Clone `konflux-release-data` fork → `/generate-konflux` → commit → push → open MR.
 
-I need a few details:
+(Note: `/generate-konflux` = pure-Python `add-namespace.sh`. Prefer upstream when `yq`/`kubectl`/`kustomize` available.)
 
-1. **Quay org** — your Konflux tenant name, used for Quay image paths (e.g., `hcc-platex-services-tenant`)
-2. **Existing Konflux tenant?** Do you already have a tenant namespace, or should I create a new one?
-   - If existing, what's the tenant name?
-3. **Admin usernames** — Kerberos IDs for Konflux admin access (e.g., `jdoe`)
-4. **Maintainer usernames** — Kerberos IDs for maintainer access
-5. **Cost center** — e.g., `735`
-6. **Quota tier** — default: `1.small` (options: `0.base` through `6.xxxlarge`)
+Post MR link. Apply `onboarding:konflux-mr`. Store Konflux info in metadata.
 
-Defaults I'll use unless you say otherwise:
-- **Cluster**: `kflux-prd-rh02`
-- **Tenant name**: `<derived from team name>`
-```
+### `onboarding:konflux-mr`
 
-Update `last_step: "konflux_info_gathering"`.
-
-### Step: Konflux Info Gathered (`konflux_info_gathering`)
-
-Check Jira comments for team responses. Once Konflux info is gathered:
-
-1. Clone `konflux-release-data` fork → run `/generate-konflux` → commit → push → open MR via `glab api`
-
-Post:
-```
-## [Phase 2/3] Konflux CI/CD — MR Opened
-
-I've opened a Konflux onboarding MR: <MR_LINK>
-
-This registers your tenant, component, and release pipeline. Please review and merge (or ask the Konflux admins to merge).
-
-Once merged, the next step is generating the Tekton pipeline files.
-```
-
-Update `last_step: "konflux_mr_opened"`.
-
-### Step: Konflux MR Merged (`konflux_mr_opened`)
-
-Monitor MR status. When merged:
-
-Post:
-```
-## [Phase 2/3] Konflux CI/CD — Action Required: Generate Tekton Pipelines
-
-The Konflux Component is registered. Now generate the CI pipeline files:
-
-1. **Go to the Konflux UI** and navigate to your component (`<component_name>`)
-2. **Trigger pipeline generation** — use "Send PR" to create a PR on your instance repo with `.tekton/` pipeline files
-3. **If "Send PR" fails** (usually due to commit signing requirements), follow this workaround: [Konflux Pipeline Setup Guide](https://docs.google.com/document/d/1c_UraNynI6h-K5ap1ORfO2Lvs0YsE9QFtBw82jZYr6E/edit?usp=sharing)
-4. **Merge the pipeline PR**
-5. **Verify the initial build** — after merge, the Tekton push pipeline should trigger automatically
-6. **Confirm Quay image** — verify the image appears at `quay.io/redhat-services-prod/<quay_org>/<instance_name>`
-
-Reply here once the pipelines are merged and the Quay image is available, and we'll move to Phase 3: Deployment.
-```
-
-Update `last_step: "tekton_setup"`.
+When MR merged: `/post-konflux-instructions` `{"epic_key", "component_name", "quay_org", "instance_name"}`. Apply `onboarding:tekton-setup`.
 
 ---
 
 ## Phase 3: Deployment
 
-### Step: Tekton Setup Confirmed (`tekton_setup`)
+### `onboarding:tekton-setup`
 
-Wait for team to confirm:
-- Tekton pipeline PR merged
-- Initial build ran successfully
-- Quay image exists
+Wait for: pipelines merged, build ran, Quay image exists.
 
-Post to confirm derived values:
-```
-## [Phase 3/3] Deployment — Confirming Details
+1. Phase 2 sub-ticket → Done, Phase 3 → In Progress
+2. `/post-deployment-confirmation` `{"epic_key", "quay_org", "instance_name", "instance_repo_url", "config_name", "pattern"}`
 
-Phase 2 is complete! Final phase — deploying your bot.
+Once confirmed: clone app-interface fork → `/generate-app-interface` → commit → push → open MR.
 
-Confirming these values for the app-interface MR:
-- **Quay image**: `quay.io/redhat-services-prod/<quay_org>/<instance_name>`
-- **Config repo**: `<instance_repo_url>`
-- **Config path**: `instance/<config_name>`
-- **SaaS pattern**: <shared / separate>
+Post MR link. Apply `onboarding:app-interface-mr`. Update metadata: `phase: 3`.
 
-Any corrections? If not, reply "looks good" and I'll open the deployment MR.
-```
+### `onboarding:app-interface-mr`
 
-Once confirmed:
-1. Clone app-interface fork → run `/generate-app-interface` → commit → push → open MR via `glab api`
+When MR merged: `/post-manual-steps` `{"epic_key", "bot_label"}`.
 
-Post:
-```
-## [Phase 3/3] Deployment — App-Interface MR Opened
+### `onboarding:manual-steps`
 
-I've opened the deployment MR: <MR_LINK>
+Parse "done" responses. All confirmed → verify checkable items, post summary. Apply `onboarding:verification`.
 
-Once merged, your bot will be deployed to the `hcmais` cluster.
-```
+### `onboarding:verification`
 
-Update `last_step: "app_interface_mr_opened"`.
+Check: config repo accessible, Jira label exists, target repos forkable.
 
-### Step: App-Interface MR Merged (`app_interface_mr_opened`)
-
-Monitor MR status. When merged:
-
-Post:
-```
-## [Phase 3/3] Deployment — Final Steps
-
-The deployment MR is merged. Almost there! A few manual steps remain:
-
-- [ ] **Create Vault secret** — the `devbot-secrets` secret needs these keys:
-  ```
-  vault kv put app-sre/integrations-output/platform-frontend-ai-dev/<instance>/devbot-secrets \
-    bot-gh-username=<github-bot-username> \
-    bot-email=<bot-email> \
-    bot-gl-name=<gitlab-bot-display-name> \
-    bot-gl-email=<gitlab-bot-email> \
-    jira-email=<jira-email>
-  ```
-  If using the shared `platex-rehor-bot` / `platform-experience-services-bot` accounts, the existing `devbot-secrets` in the namespace already has these keys — you may not need a new secret. Check with the Platform Experience team.
-  If the instance uses `browser` env, also add: `e2e-username=<sso-username> e2e-password=<sso-password>`
-- [ ] **Verify deployment** — confirm the pod is running in the `hcmais` cluster
-- [ ] **Create Jira label** — first ticket with label `<bot_label>` creates it implicitly, or create manually
-
-Please reply "done" for each step as you complete it, or ask questions if stuck.
-```
-
-Update `last_step: "manual_steps_posted"`.
-
-### Step: Manual Steps (`manual_steps_posted`)
-
-Read Jira comments for confirmation. Parse "done" responses.
-
-When all manual steps confirmed:
-1. Verify what's checkable (e.g., can bot reach the config repo?)
-2. Post final summary
-
-Update `last_step: "verification"`.
-
-### Step: Verification (`verification`)
-
-Final checks:
-- Config repo accessible
-- Jira label exists
-- Target repos forkable
-
-Post:
-```
-## Onboarding Complete! 🎉
-
-Your bot instance is live:
-- **Instance**: <instance_name>
-- **Label**: <bot_label> — tickets with this label will be picked up by your bot
-- **Dashboard**: <dashboard_url> (if applicable)
-
-If you run into any issues, reach out to the Platform Experience team.
-```
-
-Transition ticket to "Done" or "Release Pending".
-Update `last_step: "complete"`.
+Post completion msg. Phase 3 sub-ticket → Done. Epic → Done/Release Pending. Apply `onboarding:complete`. Task → `completed`.
 
 ---
 
 ## Decision Branches
 
-### GitHub vs GitLab target repos
+**GitHub vs GitLab targets**: `github.com` → `gh`, fork to `platex-rehor-bot` | `gitlab.cee.redhat.com` → `glab --hostname`, fork to `platform-experience-services-bot`
 
-Check target repo URL host:
-- `github.com` → `gh` CLI, fork to `platex-rehor-bot`
-- `gitlab.cee.redhat.com` → `glab` CLI with `--hostname gitlab.cee.redhat.com`, fork to `platform-experience-services-bot`
+**Org**: RedHatInsights → shared SaaS (Pattern A) | External → separate SaaS (Pattern B)
 
-**Instance repos are GitHub only in v1.**
-
-### Same org vs external org
-
-- **RedHatInsights**: use shared SaaS file (Pattern A in `/generate-app-interface`)
-- **External org**: create separate SaaS file (Pattern B), different Quay tenant
-- **Repo creation**: always manual — post instructions on Jira, wait for team confirmation
-
-### Shared vs separate SaaS file
-
-- **RedHatInsights org** → modify shared `deploy.yml` (Pattern A in `/generate-app-interface`)
-- **External org** → create new SaaS file (Pattern B in `/generate-app-interface`)
-
-### New vs existing Konflux tenant
-
-Ask during Phase 2:
-- **New** → full tenant creation via `/generate-konflux` with `new_tenant: true`
-- **Existing** → add component only via `/generate-konflux` with `new_tenant: false`
+**Konflux tenant**: New → `/generate-konflux` `new_tenant: true` | Existing → `new_tenant: false`
 
 ---
 
 ## Progress Tracking
 
-`task_update` with `summary` + `metadata` at each step:
+### Jira Labels (source of truth)
 
-- `last_step`: `intake` / `requirements_gathering` / `plan_posted` / `repo_requested` / `scaffolding_pr_opened` / `konflux_info_gathering` / `konflux_mr_opened` / `tekton_setup` / `app_interface_mr_opened` / `manual_steps_posted` / `verification` / `complete`
-- `next_step`, `repos`, `prs`, `mrs`, `manual_steps`, `notes`
-- `last_addressed`: ISO timestamp — **update this every time you address Jira feedback** so preflight can detect new comments vs already-handled ones
+Epic's `onboarding:*` label = authoritative step indicator. Bot applies one label per transition. Preflight reads labels.
 
-### Cycle Progress
+### Task Metadata
 
-**On resume**: `task_get(external_key)` → `progress_load(task_id=<id>)` → understand prior decisions.
+```json
+{"phase":1,"step":"intake","epic_key":"PROJ-123","phase_tickets":{"phase1":"...","phase2":"...","phase3":"..."},"requirements":{"team_name":"","instance_name":"","config_name":"","repos":[],"workflow":"jira-sprint","bot_label":"rehor-ai-...","tech_stacks":{}},"konflux":{"quay_org":"","tenant":"","cluster":"kflux-prd-rh02","admins":[],"maintainers":[],"cost_center":"","quota_tier":"1.small"},"prs":{},"mrs":{},"last_addressed":""}
+```
 
-**Before cycle ends**: `progress_store(task_id=<id>, ...)`. Call both `progress_store` + `task_update`.
+- `step` matches label suffix
+- `last_addressed` — update every time feedback addressed
+
+**Resume**: `task_get(external_key)` → read metadata → cross-check metadata `step` vs epic label.
+**End cycle**: `task_update` w/ updated metadata.
 
 ## Rules
 
-- ONE onboarding ticket per cycle
-- Feedback on active tickets > advancing phases > new tickets
-- Blocked/ambiguous → Jira comment asking for clarification + stop
-- Stay in ticket scope — don't make assumptions about what the team wants
-- **No Jira spam**: Read existing comments first. Don't repeat info already posted
-- **Phase headers on every comment**: Always prefix with `[Phase N/3] <Phase Name> —`
-- **PR/MR titles**: Include the phase and Jira ticket key. Format: `[Phase N/3] <description> (<TICKET_KEY>)`
-  - Scaffolding PR: `[Phase 1/3] Instance scaffolding for <instance_name> (<TICKET_KEY>)`
-  - Konflux MR: `[Phase 2/3] Konflux onboarding for <instance_name> (<TICKET_KEY>)`
-  - App-interface MR: `[Phase 3/3] Deploy <instance_name> (<TICKET_KEY>)`
-- **PR/MR descriptions**: Include a link back to the Jira ticket and a summary of what the PR/MR contains
-- **Store learnings**: After completion → `memory_store` with category `learning` + tags `onboarding`
-- **Use runtime env vars**: `GH_USER_NAME`, `BOT_JIRA_EMAIL`, `BOT_CONFIG_PATH` — never add custom vars if runtime provides equivalent
+- ONE ticket per cycle
+- Feedback > advancing > new tickets
+- Blocked/ambiguous → Jira comment + stop
+- No Jira spam — read before posting
+- Phase headers on every comment
+- PR/MR titles: `[Phase N/3] <desc> (<TICKET_KEY>)`
+- PR/MR descriptions: link Jira ticket + summary
+- After completion: `memory_store` category `learning` tags `onboarding`
+- Use runtime env vars: `GH_USER_NAME`, `BOT_JIRA_EMAIL`, `BOT_CONFIG_PATH`

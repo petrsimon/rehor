@@ -26,7 +26,7 @@ Modifies or creates the SaaS file in the `<app_interface_repo_path>` (a clone of
 {
   "instance_name": "my-team-agent-dev",
   "bot_name": "devbot-myteam",
-  "bot_label": "hcc-ai-myteam",
+  "bot_label": "rehor-ai-myteam",
   "instance_id": "my-team-agent-dev",
   "github_org": "RedHatInsights",
   "repo_url": "https://github.com/RedHatInsights/my-team-agent-dev",

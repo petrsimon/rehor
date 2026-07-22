@@ -9,7 +9,6 @@ Returns start when there's actionable work:
 """
 
 import os
-import sys
 
 from common import (
     INSTANCE_ID,
@@ -47,10 +46,7 @@ def _has_new_jira_feedback(task, issue):
     last_addressed = task.get("last_addressed", "")
     if not last_addressed:
         return bool(comments)
-    return any(
-        (c.get("created", "") or c.get("t", ""))[:16] > last_addressed[:16]
-        for c in comments
-    )
+    return any((c.get("created", "") or c.get("t", ""))[:16] > last_addressed[:16] for c in comments)
 
 
 def _jira_search(jql, limit=10):
@@ -77,6 +73,16 @@ def _get_candidates():
     if not result:
         return []
     return result.get("issues", [])
+
+
+def _get_onboarding_label(issue):
+    if not issue:
+        return None
+    labels = issue.get("labels", [])
+    for lbl in labels:
+        if lbl.startswith("onboarding:"):
+            return lbl
+    return None
 
 
 def _fmt_candidate(issue):
@@ -108,10 +114,19 @@ def main():
 
         task_lines = fmt_task_header(task)
         meta = task.get("metadata") or {}
-        last_step = meta.get("last_step", "")
-        task_lines.append(f"  onboarding_phase: {last_step}")
 
         issue = _jira_issue(key)
+        onboarding_label = _get_onboarding_label(issue) if issue else None
+        step_from_label = onboarding_label.split(":", 1)[1] if onboarding_label else meta.get("step", "unknown")
+        task_lines.append(f"  onboarding_step: {step_from_label} (label: {onboarding_label or 'none'})")
+
+        phase_tickets = meta.get("phase_tickets", {})
+        if phase_tickets:
+            p1 = phase_tickets.get("phase1", "?")
+            p2 = phase_tickets.get("phase2", "?")
+            p3 = phase_tickets.get("phase3", "?")
+            task_lines.append(f"  phase_tickets: P1={p1} P2={p2} P3={p3}")
+
         if issue:
             new_feedback = _has_new_jira_feedback(task, issue)
             if new_feedback:
@@ -127,9 +142,9 @@ def main():
             for pr in prs:
                 task_lines.append(f"  pr: {pr.get('host', 'github')} #{pr.get('number', '?')} ({pr.get('repo', '?')})")
 
-        phases_with_auto_advance = ("scaffolding_pr_opened", "konflux_mr_opened", "app_interface_mr_opened")
-        if last_step in phases_with_auto_advance:
-            task_lines.append(f"  *** CHECK FOR PHASE ADVANCE (current: {last_step}) ***")
+        labels_with_auto_advance = ("scaffolding-pr", "konflux-mr", "app-interface-mr")
+        if step_from_label in labels_with_auto_advance:
+            task_lines.append(f"  *** CHECK FOR PHASE ADVANCE (current: {step_from_label}) ***")
             has_work = True
 
         lines.append("\n".join(task_lines))
@@ -142,10 +157,12 @@ def main():
             candidate_lines.append(_fmt_candidate(c))
         has_work = True
 
-    save_state({
-        "active_onboarding_count": len(active_tasks),
-        "candidate_count": len(candidates),
-    })
+    save_state(
+        {
+            "active_onboarding_count": len(active_tasks),
+            "candidate_count": len(candidates),
+        }
+    )
 
     jira_cleanup()
 
