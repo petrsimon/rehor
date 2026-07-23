@@ -5,6 +5,7 @@ from pathlib import Path
 
 import uvicorn
 from fastmcp import FastMCP
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -14,7 +15,7 @@ from starlette.websockets import WebSocket
 from .db import close_pool, init_pool
 from .embeddings import load_model
 from .events import bus
-from .metrics import CONTENT_TYPE_LATEST, PrometheusMiddleware, generate_latest
+from .metrics import PrometheusMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
