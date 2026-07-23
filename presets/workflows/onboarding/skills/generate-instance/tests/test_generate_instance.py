@@ -84,17 +84,21 @@ class TestSchemaValidation:
 
     def test_repo_missing_url(self):
         with pytest.raises(Exception, match="url"):
-            _validate_input({
-                "instance_name": "test-bot",
-                "repos": [{"name": "my-repo"}],
-            })
+            _validate_input(
+                {
+                    "instance_name": "test-bot",
+                    "repos": [{"name": "my-repo"}],
+                }
+            )
 
     def test_repo_missing_name(self):
         with pytest.raises(Exception, match="name"):
-            _validate_input({
-                "instance_name": "test-bot",
-                "repos": [{"url": "https://github.com/org/repo.git"}],
-            })
+            _validate_input(
+                {
+                    "instance_name": "test-bot",
+                    "repos": [{"url": "https://github.com/org/repo.git"}],
+                }
+            )
 
     def test_rejects_extra_root_fields(self):
         with pytest.raises(Exception, match="Additional properties"):
@@ -102,17 +106,21 @@ class TestSchemaValidation:
 
     def test_rejects_extra_repo_fields(self):
         with pytest.raises(Exception, match="Additional properties"):
-            _validate_input({
-                "instance_name": "test-bot",
-                "repos": [{"name": "r", "url": "https://x.git", "extra": True}],
-            })
+            _validate_input(
+                {
+                    "instance_name": "test-bot",
+                    "repos": [{"name": "r", "url": "https://x.git", "extra": True}],
+                }
+            )
 
     def test_invalid_repo_host(self):
         with pytest.raises(Exception, match="host"):
-            _validate_input({
-                "instance_name": "test-bot",
-                "repos": [{"name": "r", "url": "https://x.git", "host": "bitbucket"}],
-            })
+            _validate_input(
+                {
+                    "instance_name": "test-bot",
+                    "repos": [{"name": "r", "url": "https://x.git", "host": "bitbucket"}],
+                }
+            )
 
 
 GITLAB_CONFIG = {
@@ -219,9 +227,7 @@ class TestTemplateRendering:
 
     def test_gitlab_fork_urls(self, tmp_path):
         generate(GITLAB_CONFIG, str(tmp_path))
-        repos = json.loads(
-            (tmp_path / "instance" / "gitlab-team-config" / "agent" / "project-repos.json").read_text()
-        )
+        repos = json.loads((tmp_path / "instance" / "gitlab-team-config" / "agent" / "project-repos.json").read_text())
         gl = repos["gl-service"]
         assert gl["url"] == "https://gitlab.cee.redhat.com/platform-experience-services-bot/gl-service.git"
         assert gl["upstream"] == "https://gitlab.cee.redhat.com/some-org/gl-service.git"

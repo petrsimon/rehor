@@ -11,12 +11,11 @@ import sys
 
 import httpx
 
-_skills_dir = os.path.join(os.path.dirname(__file__), "..")
-sys.path.insert(0, _skills_dir)
-sys.path.insert(0, os.path.join(_skills_dir, "create-phase-tickets"))
-from create_phase_tickets import add_label as _add_label  # noqa: E402
-from create_phase_tickets import create_tickets  # noqa: E402
-from jira_mcp import jira_call, jira_cleanup  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "create-phase-tickets"))
+from create_phase_tickets import add_label as _add_label
+from create_phase_tickets import create_tickets
+from jira_mcp import jira_call, jira_cleanup
 
 BOT_JIRA_EMAIL = os.environ.get("BOT_JIRA_EMAIL", "")
 BOT_MEMORY_URL = os.environ.get("BOT_MEMORY_URL", "")
