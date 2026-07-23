@@ -4,79 +4,57 @@ The bot operates as an autonomous loop: a scheduler triggers cycles, lightweight
 
 ## Architecture Overview
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                                                                      │
-│  KEDA Cron Scaler (Kubernetes)                        ❌ NOT AI      │
-│  Scales the bot pod to 1 during working hours                        │
-│                                                                      │
-└───────────────────────────┬──────────────────────────────────────────┘
-                            │ pod running
-                            ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                                                                      │
-│  Polling Loop (bot/run.py)                            ❌ NOT AI      │
-│  Infinite loop: preflight → session or sleep → repeat                │
-│                                                                      │
-└───────────────────────────┬──────────────────────────────────────────┘
-                            │ each cycle
-                            ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                                                                      │
-│  Preflight Scripts (Python)                           ❌ NOT AI      │
-│  Gather data, check tasks, classify PR states                        │
-│  Output: "start" (work found) or "skip" (nothing to do)             │
-│  Cost: $0 — runs in ~5-15 seconds                                    │
-│                                                                      │
-└────────────────┬─────────────────────────┬───────────────────────────┘
-                 │                         │
-            "start"                     "skip"
-                 │                         │
-                 ▼                         ▼
-┌────────────────────────────┐    ┌────────────────────┐
-│                            │    │                    │
-│  Claude Code Session       │    │  Sleep             │
-│                   ✅ AI    │    │  (no session)      │
-│                            │    │  ❌ NOT AI         │
-│  Reads CLAUDE.md runbook   │    │                    │
-│  + preflight data          │    │  Wait for next     │
-│  Uses MCP tools            │    │  cycle             │
-│  Writes code, opens PRs    │    │                    │
-│  Creates/updates tasks     │    └────────────────────┘
-│                            │
-└────────────┬───────────────┘
-             │ MCP calls
-             ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                                                                      │
-│  Memory Server (FastMCP + PostgreSQL)                 ❌ NOT AI      │
-│  Task storage, capacity enforcement, event publishing                │
-│                                                                      │
-│  ┌──────────┐  ┌──────────────┐  ┌──────────────────┐               │
-│  │ Tasks DB │  │ SSE Event Bus│  │ REST API         │               │
-│  │ (Postgres)│  │ (real-time)  │  │ (dashboard)      │               │
-│  └──────────┘  └──────────────┘  └──────────────────┘               │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    KEDA["KEDA Cron Scaler<br/>(Kubernetes)<br/>Scales pod to 1 during working hours"]
+    Loop["Polling Loop<br/>(bot/run.py)<br/>preflight → session or sleep → repeat"]
+    Preflight["Preflight Scripts<br/>(Python, $0)<br/>Gather data, classify, decide"]
+    Session["Claude Code Session<br/>(AI, tokens)<br/>Reads CLAUDE.md + preflight data<br/>Writes code, opens PRs"]
+    Sleep["Sleep<br/>(no session)<br/>Wait for next cycle"]
+    Memory["Memory Server<br/>(FastMCP + PostgreSQL)"]
+
+    TasksDB["Tasks DB<br/>(Postgres)"]
+    SSE["SSE Event Bus<br/>(real-time)"]
+    REST["REST API<br/>(dashboard)"]
+
+    KEDA -->|"pod running"| Loop
+    Loop -->|"each cycle"| Preflight
+    Preflight -->|"start"| Session
+    Preflight -->|"skip"| Sleep
+    Session -->|"MCP calls"| Memory
+    Memory --- TasksDB
+    Memory --- SSE
+    Memory --- REST
+
+    style KEDA fill:#f5f5f5,stroke:#999
+    style Loop fill:#f5f5f5,stroke:#999
+    style Preflight fill:#f5f5f5,stroke:#999
+    style Sleep fill:#f5f5f5,stroke:#999
+    style Session fill:#e8f5e9,stroke:#4caf50
+    style Memory fill:#f5f5f5,stroke:#999
 ```
 
 ## The Cycle
 
 Each iteration of the polling loop follows this sequence:
 
-```
-1. Sync remote config         (git pull instance config repo)
-2. Load instance config        (workflow selection, env presets)
-3. Assemble CLAUDE.md          (core + workflow + instance instructions)
-4. Run preflight scripts       (Python, sequential, all scripts run)
-5. Aggregate results           (any "start" → session; all "skip" → sleep)
-6. If "start":
-   └─ Launch Claude session    (preflight content injected into prompt)
-7. If "skip":
-   └─ Record orphan cycle      (logged to dashboard)
-   └─ Sleep                    (default ~1 hour, configurable)
-8. Cleanup                     (costs, transcripts, cache pruning)
-9. Loop back to step 1
+```mermaid
+graph TD
+    Sync["1. Sync remote config<br/>(git pull instance config repo)"]
+    Load["2. Load instance config<br/>(workflow selection, env presets)"]
+    Assemble["3. Assemble CLAUDE.md<br/>(core + workflow + instance)"]
+    Run["4. Run preflight scripts<br/>(Python, sequential, all run)"]
+    Agg{"5. Aggregate results"}
+    Launch["6. Launch Claude session<br/>(preflight content in prompt)"]
+    Orphan["7. Record orphan cycle"]
+    SleepNode["Sleep (~1 hour)"]
+    Cleanup["8. Cleanup<br/>(costs, transcripts, cache)"]
+    LoopBack["9. Loop back to step 1"]
+
+    Sync --> Load --> Assemble --> Run --> Agg
+    Agg -->|"any 'start'"| Launch --> Cleanup
+    Agg -->|"all 'skip'"| Orphan --> SleepNode --> Cleanup
+    Cleanup --> LoopBack
 ```
 
 ### When AI Runs vs When It Doesn't
@@ -100,103 +78,29 @@ The common case — "nothing changed since last cycle" — is handled entirely b
 
 Preflight scripts are Python programs that run before each Claude session. They gather data from external systems (GitHub, GitLab, Jira, memory server), classify it, and decide whether the AI should wake up.
 
-### Output Contract
+For the full reference on writing preflight scripts — output contract, naming conventions, execution model, shared utilities, error handling, and inter-script state — see [Writing Custom Preflight Scripts](presets/custom-preflight.md).
 
-Every preflight script prints exactly one JSON object to stdout:
+This section covers the concepts that tie preflight into the broader workflow loop.
 
-```json
-{"status": "start", "content": "Work found — details here..."}
+### Aggregation
+
+All scripts run to completion before any decision is made. There is no short-circuit — if script 01 returns `"start"`, scripts 02, 03 still run because the AI needs the full picture.
+
+```mermaid
+graph LR
+    S1["Script 01<br/>start"]
+    S2["Script 02<br/>skip"]
+    S3["Script 03<br/>start"]
+    S4["Script 04<br/>error"]
+    Agg["_aggregate()"]
+    Claude["Claude receives ONE prompt<br/>with ALL data"]
+
+    S1 --> Agg
+    S2 --> Agg
+    S3 --> Agg
+    S4 --> Agg
+    Agg --> Claude
 ```
-
-| Status | Session starts? | Meaning |
-|--------|:---------------:|---------|
-| `"start"` | **Yes** | Work found. `content` becomes part of the Claude prompt. |
-| `"skip"` | No | Nothing to do. `content` is logged for debugging. |
-| `"error"` | No | Script failed. Runner generates this automatically on crash/timeout. |
-
-Rules:
-- Print JSON to **stdout**. Use **stderr** for debug logging.
-- `"start"` requires non-empty `content` — it becomes the AI's input.
-- `"skip"` content is optional (logged but not sent to AI).
-
-### Where Scripts Live
-
-Scripts can come from two places, both scanned automatically:
-
-```
-presets/workflows/<workflow>/preflight/     ← workflow preflight (runs FIRST)
-  01-gh-pr-status.py
-  02-gl-mr-status.py
-  03-jira-sprint.py
-
-instance/<config>/agent/preflight/          ← instance preflight (runs SECOND)
-  04-custom-check.py                        ← you can add more here
-```
-
-Workflow scripts run first, then instance scripts. Within each group, scripts are sorted by filename.
-
-### Naming Convention
-
-```
-NN-description.py
-```
-
-- `NN` — two-digit number controlling execution order (`01`, `02`, etc.)
-- `description` — kebab-case summary of what the script checks
-- Only `.py` files are discovered; other file types are ignored
-
-### Execution
-
-Each script runs as a subprocess:
-
-```python
-subprocess.run(
-    ["python3", script_path],
-    cwd=bot_repo_root,
-    timeout=120,                    # 120 second timeout
-    env={...PYTHONPATH...},         # includes shared modules
-)
-```
-
-The runner sets `PYTHONPATH` to include:
-- `presets/shared/preflight/` — shared utility modules
-- `.claude/skills/` — skill scripts
-
-### Aggregation Logic
-
-All scripts run to completion before any decision is made. There is no short-circuit — if script 01 returns `"start"`, scripts 02, 03, etc. still run because the AI needs the full picture.
-
-```
-Script 01 → "start"   (found CI failure)
-Script 02 → "skip"    (no GitLab MRs)
-Script 03 → "start"   (found Jira comment)
-Script 04 → "error"   (Jenkins API timeout)
-                │
-                ▼
-         _aggregate()
-                │
-  ┌─────────────┼──────────────────────────────┐
-  │  1. Errors excluded from decision          │
-  │  2. Any "start" among non-errors? → YES    │
-  │  3. Content concatenated into one prompt   │
-  │  4. Errors prepended as warnings           │
-  └────────────────────────────────────────────┘
-                │
-                ▼
-  Claude receives ONE prompt with ALL data:
-
-    [PREFLIGHT ERROR] 04-custom-check.py: Jenkins API timeout
-
-    ## GH PR Status
-    ### CI FAILING (1)
-      RHCLOUD-123 PR #42: build-pipeline FAILURE
-
-    ## Jira Sprint
-    ### FEEDBACK (1)
-      RHCLOUD-456: reviewer comment about test coverage
-```
-
-Decision rules:
 
 | Condition | Result |
 |-----------|--------|
@@ -204,148 +108,75 @@ Decision rules:
 | All scripts return `"skip"` | No session. Loop sleeps. |
 | All scripts return `"error"` | No session. Exponential backoff (up to 300s). |
 
-One session receives all data — not one session per `"start"`. This lets Claude triage across all data sources.
-
-### Shared Utilities
-
-All preflight scripts can `import common` from `presets/shared/preflight/common.py`:
-
-| Function | Description |
-|----------|-------------|
-| `output_result(status, content)` | Print the JSON output protocol to stdout |
-| `get_tasks()` | Fetch active tasks from the memory server (cached via state file) |
-| `get_capacity()` | Returns `(active_count, max_count)` tuple |
-| `load_project_repos()` | Load `project-repos.json` from instance config |
-| `upstream_repo(repo_name)` | Resolve repo name to `("org/repo", "github"\|"gitlab")` |
-| `get_task_prs(task)` | Extract PR info from task metadata |
-| `is_bot_author(author)` | Check if a comment author is a known bot |
-| `fmt_task_header(task)` | Format common task fields for prompt output |
-| `fmt_comments(comments, label, since)` | Format comment list, filtered by timestamp |
-| `load_state()` / `save_state(updates)` | Inter-script shared state (see below) |
-
-### Inter-Script State
-
-Scripts within the same preflight run can share data through a state file to avoid redundant API calls:
-
-```python
-# Script 01: fetch tasks once
-from common import get_tasks, save_state
-tasks = get_tasks()              # HTTP call to memory server
-save_state({"tasks": tasks})     # writes data/preflight-state.json
-
-# Script 02: reuse cached tasks
-from common import load_state
-state = load_state()
-tasks = state.get("tasks", [])   # no HTTP call
-```
-
-The state file is automatically deleted after each preflight run completes. It does not persist across cycles.
-
-### Error Handling
-
-The runner handles all failure modes — scripts don't need to catch these:
-
-| Failure | Runner's response |
-|---------|-------------------|
-| Non-zero exit code | `ScriptResult(status="error", content=stderr)` |
-| Timeout (120s) | `ScriptResult(status="error", content="timed out")` |
-| Empty stdout | `ScriptResult(status="error", content="produced no output")` |
-| Invalid JSON | `ScriptResult(status="error", content="invalid JSON: ...")` |
-| Unknown status value | `ScriptResult(status="error", content="unknown status: ...")` |
-| `"start"` with empty content | `ScriptResult(status="error", content="start with empty content")` |
-
-A single script error does **not** block the cycle. If script 01 errors but script 03 returns `"start"`, the session still starts. The error is included in the prompt as a `[PREFLIGHT ERROR]` warning so Claude knows one data source is degraded. Only when **all** scripts error does the cycle fail.
+One session receives all data — not one session per `"start"`. This lets Claude triage across all data sources. Errors are prepended as `[PREFLIGHT ERROR]` warnings so Claude knows a data source is degraded.
 
 ### Preflight Is Read-Only
 
-Preflight scripts only **read** tasks — they never create, update, or archive them:
-
-```
-PREFLIGHT (Python, $0)                 AGENT (Claude, $$$)
-─────────────────────                  ──────────────────
-get_tasks()         READ               task_add()        CREATE
-get_capacity()      READ               task_update()     UPDATE
-filter by status    READ               task_remove()     ARCHIVE
-filter by prefix    READ
-```
-
-This separation is intentional: preflights are pure functions over external state. They can never corrupt the task system, even if they crash.
+Preflight scripts only **read** tasks — they never create, update, or archive them. This separation is intentional: preflights are pure functions over external state. They can never corrupt the task system, even if they crash. See [the design doc](presets-design.md) for the rationale.
 
 ### What a Preflight Script Must Do
 
-Every preflight script should follow this pattern. The order matters — check tasks first, then check for work.
+Every preflight script follows a two-phase pattern. The order matters — check tasks first, then check for work.
 
-```
-Phase 1: Task checks (mandatory)
-  ├─ get_tasks()                    fetch all tasks from memory server
-  ├─ get_capacity()                 get (active_count, max_count)
-  ├─ filter active tasks            status in ("in_progress", "pr_open", "pr_changes")
-  ├─ check for duplicate work       does a task with MY prefix already exist?
-  │   → YES: output_result("skip")
-  ├─ check capacity                 active_count >= max_count?
-  │   → YES: output_result("skip")
-  └─ proceed to Phase 2
+```mermaid
+graph TD
+    Start["Preflight script starts"]
+    Tasks["Phase 1: get_tasks() + get_capacity()"]
+    Dup{"Task with MY prefix<br/>already active?"}
+    Cap{"At capacity?<br/>(active ≥ max)"}
+    Work["Phase 2: Query external system<br/>(GitHub, Jira, Jenkins, etc.)"]
+    Found{"Actionable<br/>work found?"}
+    SkipDup["skip: Already in progress"]
+    SkipCap["skip: At capacity"]
+    SkipNone["skip: No work found"]
+    GoStart["start: structured data for Claude"]
 
-Phase 2: Work discovery (workflow-specific)
-  ├─ query external system          GitHub API, Jira, Jenkins, etc.
-  ├─ classify results               actionable vs not
-  ├─ no work found?
-  │   → output_result("skip", "reason")
-  └─ work found?
-      → output_result("start", "structured data for Claude")
+    Start --> Tasks --> Dup
+    Dup -->|"Yes"| SkipDup
+    Dup -->|"No"| Cap
+    Cap -->|"Yes"| SkipCap
+    Cap -->|"No"| Work --> Found
+    Found -->|"No"| SkipNone
+    Found -->|"Yes"| GoStart
 ```
 
 #### Phase 1: Task Checks
 
 These three checks prevent the bot from creating duplicate work or exceeding capacity. Every preflight script should include them:
 
-**1. Fetch tasks and capacity:**
-
 ```python
 from common import get_tasks, get_capacity, output_result
+
+TASK_KEY_PREFIX = "my-workflow:"    # unique to your workflow
 
 tasks = get_tasks()
 active_n, max_n = get_capacity()
 active = [t for t in tasks if t.get("status") in ("in_progress", "pr_open", "pr_changes")]
-```
 
-**2. Check for duplicate work using `external_key` prefix:**
-
-```python
-TASK_KEY_PREFIX = "my-workflow:"    # unique to your workflow
-
-my_tasks = [t for t in active
-            if t.get("external_key", "").startswith(TASK_KEY_PREFIX)]
+# Check for duplicate work
+my_tasks = [t for t in active if t.get("external_key", "").startswith(TASK_KEY_PREFIX)]
 if my_tasks:
-    keys = ", ".join(t.get("external_key", "") for t in my_tasks)
-    output_result("skip", f"Already in progress: {keys}")
+    output_result("skip", f"Already in progress: {my_tasks[0]['external_key']}")
     return
-```
 
-The `TASK_KEY_PREFIX` is how a workflow identifies "its" tasks. Each workflow uses a different prefix (see [Task Identity](#task-identity) below).
-
-**3. Check capacity:**
-
-```python
+# Check capacity (global — counts ALL active tasks, not just yours)
 if active_n >= max_n:
     output_result("skip", f"At capacity ({active_n}/{max_n})")
     return
 ```
 
-Capacity is global — it counts ALL active tasks across all workflows, not just yours.
+The `TASK_KEY_PREFIX` is how a workflow identifies "its" tasks. Each workflow uses a different prefix (see [Task Identity](#task-identity) below).
 
 #### Phase 2: Work Discovery
 
 This is workflow-specific. Query your external system and decide if there's actionable work:
 
 ```python
-# Example: check for open bot PRs
 prs = find_bot_prs(upstream_repo, bot_author)
 if len(prs) < 2:
     output_result("skip", f"Only {len(prs)} PRs, need ≥2")
     return
 
-# Include everything the agent needs in the content
 output_result("start", json.dumps({
     "repo": upstream_repo,
     "pr_count": len(prs),
@@ -358,47 +189,6 @@ Key points:
 - The `content` in `"start"` becomes the AI's input prompt — include all data Claude needs
 - Pre-compute the `task_key` so the agent doesn't have to figure out the key format
 - Filter out noise (healthy items, resolved issues) — every character costs tokens
-
-#### Complete Skeleton
-
-```python
-#!/usr/bin/env python3
-"""Preflight: check for work and gate on task state."""
-
-import json
-from common import get_tasks, get_capacity, output_result
-
-TASK_KEY_PREFIX = "my-workflow:"
-
-def main():
-    # Phase 1: Task checks
-    tasks = get_tasks()
-    active_n, max_n = get_capacity()
-    active = [t for t in tasks if t.get("status") in ("in_progress", "pr_open", "pr_changes")]
-
-    my_tasks = [t for t in active if t.get("external_key", "").startswith(TASK_KEY_PREFIX)]
-    if my_tasks:
-        output_result("skip", f"Already in progress: {my_tasks[0]['external_key']}")
-        return
-
-    if active_n >= max_n:
-        output_result("skip", f"At capacity ({active_n}/{max_n})")
-        return
-
-    # Phase 2: Work discovery (replace with your logic)
-    work = find_work()
-    if not work:
-        output_result("skip", "No work found")
-        return
-
-    output_result("start", json.dumps({
-        "items": work,
-        "task_key": f"{TASK_KEY_PREFIX}{work[0]['scope']}",
-    }))
-
-if __name__ == "__main__":
-    main()
-```
 
 ### Preflight-to-Agent Data Handoff
 
@@ -460,68 +250,43 @@ Preflight scripts use this to:
 
 ### State Diagram
 
-```
-                         ┌──────────────────────┐
-                         │      NO TASK          │
-                         │  (nothing in DB)      │
-                         └──────────┬─────────────┘
-                                    │
-                          task_add(status="in_progress")
-                          or task_add(status="pr_open")
-                                    │
-                    ┌───────────────┴───────────────┐
-                    │                               │
-                    ▼                               ▼
-         ┌──────────────────┐            ┌──────────────────┐
-         │   in_progress     │            │    pr_open        │
-         │  coding/testing   │───────────▶│  waiting for      │
-         │                   │ push PR    │  CI / review      │
-         └──────────────────┘            └──┬────┬──────┬───┘
-                    ▲                        │    │      │
-                    │               CI fix   │    │      │ reviewer
-                    │               pushed   │    │      │ requests
-                    │                        │    │      │ changes
-                    │                        │    │      │
-                    │                        │    │      ▼
-                    │                        │    │   ┌──────────────────┐
-                    │                        │    │   │   pr_changes      │
-                    │                        │    │   │  addressing       │
-                    │                        │    │   │  review feedback  │──┐
-                    │                        │    │   └──────────────────┘  │
-                    │                        │    │     agent pushes fix,   │
-                    │                        │    │     status → pr_open    │
-                    │                        │    │           ▲             │
-                    │                        │    │           └─────────────┘
-                    │                        │    │
-                    │                   ┌────┘    └────┐
-                    │                   │              │
-                    │              CI passes      CI fails /
-                    │              PR merged      can't fix
-                    │                   │              │
-                    │                   ▼              ▼
-                    │            close originals   delete branch
-                    │            link to PR        keep originals
-                    │                   │              │
-                    │                   ▼              ▼
-                    │            ┌──────────────────────────┐
-                    │            │          done             │
-                    │            │  work finished            │
-                    │            └──────────┬───────────────┘
-                    │                       │
-                    │                  task_remove()
-                    │                       │
-                    │                       ▼
-                    │            ┌──────────────────────────┐
-                    │            │        archived           │
-                    │            │  soft-deleted from queries │
-                    │            └──────────────────────────┘
-                    │
-                    │            ┌──────────────────────────┐
-                    └────────────│        paused             │
-                     unblock     │  (escape hatch)           │
-                                 │  blocked on question      │
-                                 │  doesn't count as active  │
-                                 └──────────────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> in_progress : task_add()
+    [*] --> pr_open : task_add(status=pr_open)
+
+    in_progress --> pr_open : Push PR
+    in_progress --> paused : Blocked on question
+
+    pr_open --> pr_open : CI fix pushed
+    pr_open --> pr_changes : Reviewer requests changes
+    pr_open --> done : PR merged, cleanup done
+    pr_open --> done : CI failed, can't fix
+    pr_open --> paused : Blocked on question
+
+    pr_changes --> pr_open : Fix pushed, awaiting re-review
+    pr_changes --> paused : Blocked on question
+
+    paused --> in_progress : Unblocked
+
+    done --> archived : task_remove()
+
+    state in_progress {
+        direction LR
+        [*] : coding / testing
+    }
+    state pr_open {
+        direction LR
+        [*] : waiting for CI / review
+    }
+    state pr_changes {
+        direction LR
+        [*] : addressing review feedback
+    }
+    state paused {
+        direction LR
+        [*] : does NOT count as active
+    }
 ```
 
 ### State Transitions
@@ -579,20 +344,13 @@ Common values: `"jira"`, `"github"`, `"gitlab"`, `"scheduled"`.
 
 #### How Task Keys Flow Through the System
 
-The task key is defined in three places — and they must agree:
+```mermaid
+graph LR
+    PF["Preflight script<br/><br/>TASK_KEY_PREFIX =<br/>'my-workflow:'<br/><br/>Pre-computes task_key<br/>in output"]
+    CM["CLAUDE.md runbook<br/><br/>Defines the key<br/>format as prose<br/>instructions"]
+    Agent["Agent (Claude)<br/><br/>task_add(<br/>  external_key=<br/>  'my-workflow:org/repo',<br/>  source_type='github'<br/>)"]
 
-```
-┌─────────────────────┐     ┌───────────────────────┐     ┌──────────────────┐
-│  Preflight script   │     │  CLAUDE.md runbook     │     │  Agent (Claude)  │
-│                     │     │                        │     │                  │
-│  TASK_KEY_PREFIX =  │     │  "Use this format:     │     │  task_add(       │
-│  "my-workflow:"     │     │   my-workflow:<repo>"  │     │    external_key= │
-│                     │     │                        │     │    "my-workflow:  │
-│  Pre-computes:      │────▶│  Defines the key       │────▶│     org/repo",  │
-│  task_key in output │     │  format as prose        │     │    source_type=  │
-│                     │     │  instructions           │     │    "github"     │
-└─────────────────────┘     └───────────────────────┘     └──────────────────┘
-     (Python code)              (Prose for AI)              (MCP tool call)
+    PF -->|"content includes task_key"| CM -->|"agent reads instructions"| Agent
 ```
 
 1. **Preflight defines the prefix** — in Python code, used for duplicate checking
@@ -600,225 +358,116 @@ The task key is defined in three places — and they must agree:
 3. **CLAUDE.md documents the key format** — as prose instructions for the AI agent
 4. **Agent uses the key** — in `task_add` and `task_update` MCP calls
 
-Example from a real CLAUDE.md runbook:
-
-```markdown
-## Task Tracking
-
-When you start working on a repository, create a task:
-- external_key: `konflux-pr-squash:<org>/<repo>` (e.g. `konflux-pr-squash:project-kessel/insights-rbac`)
-- source_type: `github`
-- status: starts as `in_progress`, move to `pr_open` when PR is created
-```
-
-And the corresponding preflight outputs:
-
-```json
-{
-  "repo": "project-kessel/insights-rbac",
-  "task_key": "konflux-pr-squash:project-kessel/insights-rbac",
-  "prs": [...]
-}
-```
-
-The agent reads the pre-computed `task_key` from the preflight data and uses it directly in `task_add`.
-
 ### MCP Tools
 
-The agent interacts with tasks through MCP tools exposed by the `bot-memory` server:
+The agent interacts with tasks through MCP tools exposed by the `bot-memory` server. For the full tool reference, see [the core instructions](../presets/core/CLAUDE.md#task-tools).
 
 | Tool | Purpose | Key behavior |
 |------|---------|-------------|
 | `task_add` | Create a new task | **Refuses if ≥10 active tasks.** Publishes `task_added` event. |
-| `task_update` | Change status, summary, metadata | Lookup by `external_key` + `source_type`. Metadata is merged (not replaced). Publishes `task_updated` event. |
+| `task_update` | Change status, summary, metadata | Lookup by `external_key` + `source_type`. Metadata is merged (not replaced). |
 | `task_get` | Fetch one task | Lookup by `external_key` + `source_type`. |
 | `task_list` | List all tasks | Filters by status, instance_id. Excludes `archived` by default. |
-| `task_remove` | Archive a task | Sets status to `archived` (soft delete, preserves history). Publishes `task_archived` event. |
-| `task_check_capacity` | Check if bot can take more work | Returns `{active: N, max: 10, has_capacity: bool}`. |
-| `bot_status_update` | Update bot's current activity | States: `working`, `idle`, `error`. Shown on dashboard. |
+| `task_remove` | Archive a task | Sets status to `archived` (soft delete, preserves history). |
+| `task_check_capacity` | Check capacity | Returns `{active: N, max: 10, has_capacity: bool}`. |
 
 ### Who Reads vs Who Writes
 
-```
-                    ┌────────────────┐
-                    │  PostgreSQL    │
-                    │  tasks table   │
-                    └───┬───┬───┬───┘
-                        │   │   │
-         ┌──────────────┘   │   └──────────────┐
-         │                  │                  │
-         ▼                  ▼                  ▼
-  Preflight scripts    Claude agent       Dashboard
-  (Python, no AI)      (MCP tools)        (REST API)
+```mermaid
+graph TB
+    DB["PostgreSQL<br/>tasks table"]
 
-  get_tasks()          task_list()        GET /api/tasks
-  get_capacity()       task_get()
-                       task_add()         SSE /api/events
-  READ ONLY            task_update()      (real-time)
-                       task_remove()
-                       READ + WRITE       READ ONLY
+    PF["Preflight scripts<br/>(Python, no AI)<br/><br/>get_tasks()<br/>get_capacity()<br/><br/>READ ONLY"]
+    Agent2["Claude agent<br/>(MCP tools)<br/><br/>task_list / task_get<br/>task_add / task_update<br/>task_remove<br/><br/>READ + WRITE"]
+    Dash["Dashboard<br/>(REST API)<br/><br/>GET /api/tasks<br/>SSE /api/events<br/><br/>READ ONLY"]
+
+    DB --> PF
+    DB --> Agent2
+    DB --> Dash
 ```
 
 ---
 
 ## Complete Workflow Example
 
-This traces a full lifecycle through multiple scheduler ticks, showing every task state transition.
+This traces a full lifecycle through multiple scheduler ticks, showing every task state transition. The example uses the Konflux PR consolidation workflow, but the pattern applies to any workflow.
 
 ### Tick 1 — First Run, No Task Exists
 
-```
-SCHEDULER
-    │
-    ▼
-PREFLIGHT: 01-check-bot-prs.py
-    ├─ get_tasks() → []                           no tasks exist
-    ├─ get_capacity() → (0, 10)                   0 active, 10 max
-    ├─ filter by prefix → []                      no blocker
-    ├─ gh pr list --author red-hat-konflux[bot]
-    ├─ found 4 open bot PRs (≥2 required)
-    └─ output_result("start", {repo, prs, ...})
-                                                   ┌─────────────┐
-    ▼                                              │  NO TASK     │
-                                                   └─────────────┘
-CLAUDE SESSION starts
-    ├─ Reads CLAUDE.md runbook + preflight data
-    ├─ Runs consolidation script
-    │   ├─ Groups PRs by ecosystem (Go: 3, Python: 1)
-    │   ├─ Skips Python (only 1 PR)
-    │   ├─ Processes Go: go get × 3, go mod tidy
-    │   ├─ Pushes branch, creates PR #55
-    │   └─ Resolves any conflicts
-    │
-    ├─ Creates task via MCP:
-    │   task_add(
-    │     external_key = "konflux-pr-squash:org/repo",
-    │     source_type  = "github",
-    │     status       = "pr_open",
-    │     metadata     = {prs: [{number: 55, host: "github"}], ...}
-    │   )
-    │                                              ┌─────────────┐
-    │   Memory server:                             │   pr_open    │
-    │     ✓ active count (0) < max (10)            │              │
-    │     ✓ INSERT INTO tasks                      │  waiting for │
-    │     ✓ publish "task_added" event             │  CI pipeline │
-    │       → dashboard updates                    └─────────────┘
-    │       → Slack notified
-    │
-    └─ Session ends.
+```mermaid
+graph TD
+    PF1["Preflight: 01-check-bot-prs.py<br/>get_tasks() → empty<br/>get_capacity() → 0/10<br/>gh pr list → 4 bot PRs"]
+    Start1["output_result('start', ...)"]
+    CS1["Claude session starts<br/>Groups PRs: Go=3, Python=1<br/>Skips Python (only 1)<br/>Processes Go: go get × 3<br/>Creates PR #55"]
+    Task1["task_add(<br/>  key='konflux-pr-squash:org/repo',<br/>  source_type='github',<br/>  status='pr_open'<br/>)"]
+    State1(("pr_open"))
+
+    PF1 --> Start1 --> CS1 --> Task1 --> State1
 ```
 
 ### Tick 2 — CI Still Running
 
-```
-PREFLIGHT: 01-check-bot-prs.py
-    ├─ get_tasks() → [{status: "pr_open", external_key: "konflux-pr-squash:..."}]
-    ├─ filter by prefix → FOUND active task
-    └─ output_result("skip", "Already in progress")
+```mermaid
+graph TD
+    PF2a["01-check-bot-prs.py<br/>Found active task with prefix<br/>→ skip"]
+    PF2b["gh_pr_status.py<br/>PR #55 CI: PENDING<br/>→ skip (CLEAN)"]
+    NoSession["No Claude session. Zero tokens."]
+    State2(("pr_open<br/>unchanged"))
 
-PREFLIGHT: gh_pr_status.py                        ┌─────────────┐
-    ├─ gh pr view #55 → CI: PENDING               │   pr_open    │
-    ├─ classify → CLEAN                            │  (unchanged) │
-    └─ output_result("skip", "all clean")          └─────────────┘
-
-No Claude session. Zero tokens.
+    PF2a --> NoSession
+    PF2b --> NoSession
+    NoSession -.-> State2
 ```
 
 ### Tick 3 — CI Passed, PR Merged
 
-```
-PREFLIGHT: gh_pr_status.py
-    ├─ gh pr view #55 → state: MERGED
-    ├─ classify → MERGED
-    └─ output_result("start", "MERGED: PR #55")
+```mermaid
+graph TD
+    PF3["gh_pr_status.py<br/>PR #55 state: MERGED<br/>→ start"]
+    CS3["Claude session<br/>Closes original bot PRs 101, 102, 103<br/>with comment linking to #55"]
+    Task3["task_update(status='done',<br/>summary='3 PRs consolidated, merged')"]
+    State3(("done"))
 
-CLAUDE SESSION starts                              ┌─────────────┐
-    ├─ Sees: "PR #55 is MERGED"                    │   pr_open    │
-    ├─ Closes original bot PRs:                    └──────┬──────┘
-    │   gh pr comment 101 "Consolidated into #55"         │
-    │   gh pr close 101                                   │
-    │   gh pr close 102                                   │
-    │   gh pr close 103                                   │
-    │                                                     │
-    ├─ Updates task:                                      │
-    │   task_update(                                      │
-    │     external_key = "konflux-pr-squash:org/repo",    │
-    │     source_type  = "github",                        │
-    │     status       = "done",                          │
-    │     summary      = "3 PRs consolidated, merged"     │
-    │   )                                                 │
-    │                                              ┌──────▼──────┐
-    │                                              │    done      │
-    │                                              │ lock released│
-    └─ Session ends.                               └─────────────┘
+    PF3 --> CS3 --> Task3 --> State3
 ```
 
 ### Tick 4 — Loop Is Free Again
 
-```
-PREFLIGHT: 01-check-bot-prs.py
-    ├─ get_tasks() → [{status: "done"}]            "done" is NOT active
-    ├─ filter by prefix → []                       no blocker
-    ├─ gh pr list → 0 open bot PRs
-    └─ output_result("skip", "0 PRs, need ≥2")
+```mermaid
+graph TD
+    PF4["01-check-bot-prs.py<br/>Tasks: [{status: 'done'}] — not active<br/>gh pr list → 0 bot PRs<br/>→ skip"]
+    NoSession4["No Claude session. Waiting for new bot PRs."]
 
-No Claude session. Waiting for new bot PRs.
+    PF4 --> NoSession4
 ```
 
-### Alternative Path: CI Fails
+### Alternative: CI Fails
 
-```
-PREFLIGHT: gh_pr_status.py
-    ├─ gh pr view #55 → CI: FAILURE
-    └─ output_result("start", "CI FAILING: build-pipeline")
+```mermaid
+graph TD
+    PF5["gh_pr_status.py<br/>PR #55 CI: FAILURE<br/>→ start"]
+    CS5{"Can agent fix?"}
+    Fix["Push fix, stay pr_open<br/>Next tick re-checks CI"]
+    Fail["Delete branch, close PR<br/>Do NOT close originals<br/>task_update(status='done')"]
+    StateOpen(("pr_open"))
+    StateDone(("done<br/>originals still open"))
 
-CLAUDE SESSION                                     ┌─────────────┐
-    ├─ Reads CI failure details                    │   pr_open    │
-    │                                              └──────┬──────┘
-    ├─ Can fix? Try go mod tidy -e, push fix              │
-    │   → task_update(status="pr_open", ...)              │
-    │     stays pr_open, next tick re-checks CI           │
-    │                                              ┌──────▼──────┐
-    │                                              │   pr_open    │
-    │                                              └─────────────┘
-    │
-    └─ Cannot fix?
-        ├─ git push origin --delete <branch>
-        ├─ gh pr close #55
-        ├─ Do NOT close originals (they're fallbacks)
-        ├─ task_update(status="done",
-        │    summary="CI failed, branch deleted")
-        │                                          ┌─────────────┐
-        └─ Session ends.                           │    done      │
-                                                   │ originals    │
-                                                   │ still open   │
-                                                   └─────────────┘
+    PF5 --> CS5
+    CS5 -->|"Yes"| Fix --> StateOpen
+    CS5 -->|"No"| Fail --> StateDone
 ```
 
-### Alternative Path: Review Feedback
+### Alternative: Review Feedback
 
-```
-PREFLIGHT: gh_pr_status.py
-    ├─ gh pr view #55 → reviewDecision: CHANGES_REQUESTED
-    └─ output_result("start", "FEEDBACK: review:jdoe")
+```mermaid
+graph TD
+    PF6["gh_pr_status.py<br/>reviewDecision: CHANGES_REQUESTED<br/>→ start"]
+    CS6["Claude session<br/>Reads review comments<br/>Addresses feedback, pushes fix"]
+    Task6["task_update(<br/>  status='pr_changes',<br/>  last_addressed=now<br/>)"]
+    State6(("pr_changes<br/>still blocks new runs"))
+    Next["Next tick: gh_pr_status.py checks again<br/>→ approved: MERGED path<br/>→ more feedback: repeats"]
 
-CLAUDE SESSION                                     ┌─────────────┐
-    ├─ Reads review comments                       │   pr_open    │
-    ├─ Addresses feedback, pushes fix              └──────┬──────┘
-    │                                                     │
-    ├─ task_update(                                       │
-    │    status = "pr_changes",                           │
-    │    last_addressed = "2026-07-23T14:30:00Z"          │
-    │  )                                                  │
-    │                                              ┌──────▼──────┐
-    └─ Session ends.                               │ pr_changes   │
-                                                   │ still blocks │
-                                                   │ new runs     │
-                                                   └─────────────┘
-
-Next tick: gh_pr_status.py checks again.
-  → CI passes + approved → MERGED path → done
-  → More feedback → FEEDBACK path repeats
+    PF6 --> CS6 --> Task6 --> State6 -.-> Next
 ```
 
 ---
