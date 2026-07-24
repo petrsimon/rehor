@@ -70,6 +70,7 @@ def record_transcript(
     ctx: CycleContext | None = None,
     cwd: str = "",
     instance_id: str | None = None,
+    input_prompt: str | None = None,
 ) -> None:
     """Compress and store the cycle transcript + metadata to the dashboard API."""
     session_id = getattr(result, "session_id", "")
@@ -95,6 +96,7 @@ def record_transcript(
         "finished_at": now.isoformat(),
         "tool_calls": getattr(result, "num_turns", 0),
         "tokens_used": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+        "input_prompt": input_prompt,
         "progress": {
             "jira_key": ctx.jira_key if ctx else None,
             "repo": ctx.repo if ctx else None,
@@ -137,6 +139,7 @@ def post_orphan_cycle(
     cycle_type: str,
     content: str,
     task_id: int | None = None,
+    input_prompt: str | None = None,
 ) -> None:
     """Post a cycle run to the dashboard without a Claude session (preflight skip/error)."""
     now = datetime.now(timezone.utc)
@@ -148,6 +151,7 @@ def post_orphan_cycle(
         "finished_at": now.isoformat(),
         "tool_calls": 0,
         "tokens_used": 0,
+        "input_prompt": input_prompt,
         "progress": {
             "summary": content[:2000] if content else None,
             "work_type": cycle_type,

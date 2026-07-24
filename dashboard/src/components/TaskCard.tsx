@@ -75,9 +75,11 @@ export default function TaskCard({ task, selected, onClick }: Props) {
             <LabelGroup>
               <Label variant="outline">{task.repo}</Label>
               {firstArtifact && (
-                <Label color="blue" href={firstArtifact.url} onClick={(e) => e.stopPropagation()}>
-                  {firstArtifact.name}
-                </Label>
+                <span onClick={(e) => e.stopPropagation()}>
+                  <Label color="blue" href={firstArtifact.url}>
+                    {firstArtifact.name}
+                  </Label>
+                </span>
               )}
               <Label variant="outline">{timeAgo(task.created_at)}</Label>
               {task.last_addressed && (

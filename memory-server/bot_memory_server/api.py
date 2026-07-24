@@ -13,10 +13,36 @@ from starlette.responses import JSONResponse, Response
 from .db import get_pool
 from .embeddings import embed
 from .events import Event, bus
+from .tools.tasks import ACTIVE_STATUSES
 
 logger = logging.getLogger(__name__)
 
 wake_signals: set[str] = set()
+
+
+def _parse_json_field(value):
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+def _restore_status_from_row(row) -> str:
+    """Pick active status when resuming a paused/archived task.
+
+    Uses ``status_before_pause`` stored in metadata when available,
+    falling back to artifact-based heuristic.
+    """
+    meta = _parse_json_field(row.get("metadata")) or {}
+    saved = meta.get("status_before_pause")
+    if saved and saved in ACTIVE_STATUSES:
+        return saved
+    artifacts = _parse_json_field(row.get("artifacts")) or []
+    for artifact in artifacts:
+        if artifact.get("type") in ("pull_request", "merge_request"):
+            return "pr_open"
+    if meta.get("prs"):
+        return "pr_open"
+    return "in_progress"
 
 
 async def api_tasks(request: Request) -> JSONResponse:
@@ -125,25 +151,111 @@ async def api_task_delete(request: Request) -> JSONResponse:
 
 
 async def api_task_unarchive(request: Request) -> JSONResponse:
-    """Restore an archived task back to in_progress so the bot can pick it up."""
+    """Restore an archived task so the bot can pick it up."""
     pool = get_pool()
     key = request.path_params.get("key")
     if not key:
         return JSONResponse({"error": "missing key"}, status_code=400)
-    row = await pool.fetchrow(
-        "UPDATE tasks SET status = 'in_progress'::task_status, paused_reason = NULL"
-        " WHERE external_key = $1 AND status = 'archived'::task_status RETURNING *",
+
+    existing = await pool.fetchrow(
+        "SELECT * FROM tasks WHERE external_key = $1 AND status = 'archived'::task_status",
         key,
+    )
+    if not existing:
+        return JSONResponse({"error": f"Task {key} not found or not archived"}, status_code=404)
+
+    new_status = _restore_status_from_row(existing)
+    row = await pool.fetchrow(
+        "UPDATE tasks SET status = $2::task_status, paused_reason = NULL,"
+        " metadata = metadata - 'status_before_pause'"
+        " WHERE external_key = $1 AND status = 'archived'::task_status"
+        " RETURNING *",
+        key,
+        new_status,
     )
     if not row:
         return JSONResponse({"error": f"Task {key} not found or not archived"}, status_code=404)
+
     await bus.publish(
         Event(
             "task_updated",
-            {"external_key": key, "status": "in_progress"},
+            {"external_key": key, "status": new_status},
         )
     )
     return JSONResponse({"unarchived": True, "external_key": key, "task": _task(row)})
+
+
+async def api_task_pause(request: Request) -> JSONResponse:
+    """Pause an active task so the bot skips it until unpaused."""
+    pool = get_pool()
+    key = request.path_params.get("key")
+    if not key:
+        return JSONResponse({"error": "missing key"}, status_code=400)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    reason = None
+    if isinstance(body, dict):
+        reason = body.get("paused_reason")
+    if not reason:
+        reason = "Paused via dashboard"
+
+    row = await pool.fetchrow(
+        "UPDATE tasks SET status = 'paused'::task_status,"
+        " paused_reason = $2,"
+        " metadata = jsonb_set(COALESCE(metadata, '{}'), '{status_before_pause}', to_jsonb(status::text))"
+        " WHERE external_key = $1 AND status = ANY($3)"
+        " RETURNING *",
+        key,
+        reason,
+        list(ACTIVE_STATUSES),
+    )
+    if not row:
+        return JSONResponse({"error": f"Task {key} not found or not active"}, status_code=404)
+    await bus.publish(
+        Event(
+            "task_updated",
+            {"external_key": key, "status": "paused", "summary": reason},
+        )
+    )
+    return JSONResponse({"paused": True, "external_key": key, "task": _task(row)})
+
+
+async def api_task_unpause(request: Request) -> JSONResponse:
+    """Resume a paused task so the bot can pick it up again."""
+    pool = get_pool()
+    key = request.path_params.get("key")
+    if not key:
+        return JSONResponse({"error": "missing key"}, status_code=400)
+
+    existing = await pool.fetchrow(
+        "SELECT * FROM tasks WHERE external_key = $1 AND status = 'paused'::task_status",
+        key,
+    )
+    if not existing:
+        return JSONResponse({"error": f"Task {key} not found or not paused"}, status_code=404)
+
+    new_status = _restore_status_from_row(existing)
+    row = await pool.fetchrow(
+        "UPDATE tasks SET status = $2::task_status, paused_reason = NULL,"
+        " metadata = metadata - 'status_before_pause'"
+        " WHERE external_key = $1 AND status = 'paused'::task_status"
+        " RETURNING *",
+        key,
+        new_status,
+    )
+    if not row:
+        return JSONResponse({"error": f"Task {key} not found or not paused"}, status_code=404)
+
+    await bus.publish(
+        Event(
+            "task_updated",
+            {"external_key": key, "status": new_status},
+        )
+    )
+    return JSONResponse({"unpaused": True, "external_key": key, "task": _task(row)})
 
 
 async def api_memories(request: Request) -> JSONResponse:
@@ -805,7 +917,7 @@ async def api_stats(request: Request) -> JSONResponse:
 
 _CYCLE_RUN_LIST_COLUMNS = (
     "id, task_id, cycle_type, instance_id, started_at, finished_at, "
-    "tool_calls, tokens_used, progress, created_at, "
+    "tool_calls, tokens_used, progress, input_prompt, created_at, "
     "(transcript IS NOT NULL) AS has_transcript"
 )
 
@@ -904,6 +1016,7 @@ async def api_cycle_runs_add(request: Request) -> JSONResponse:
     parsed_finished = datetime.fromisoformat(finished_at) if finished_at else None
 
     instance_id_val = body.get("instance_id")
+    input_prompt = body.get("input_prompt")
 
     # When uploading a transcript, attach it to the most recent cycle_run
     # for this specific instance that has no transcript yet (created by
@@ -917,7 +1030,8 @@ async def api_cycle_runs_add(request: Request) -> JSONResponse:
                 finished_at = COALESCE($2, finished_at, NOW()),
                 tool_calls = COALESCE($3, tool_calls),
                 tokens_used = COALESCE($4, tokens_used),
-                task_id = COALESCE(task_id, $5)
+                task_id = COALESCE(task_id, $5),
+                input_prompt = COALESCE($7, input_prompt)
             WHERE id = (
                 SELECT id FROM cycle_runs
                 WHERE instance_id = $6
@@ -934,14 +1048,15 @@ async def api_cycle_runs_add(request: Request) -> JSONResponse:
             body.get("tokens_used"),
             task_id,
             instance_id_val,
+            input_prompt,
         )
 
     if row is None:
         row = await pool.fetchrow(
             f"""
             INSERT INTO cycle_runs (task_id, cycle_type, instance_id, started_at, finished_at,
-                                    tool_calls, tokens_used, progress, transcript)
-            VALUES ($1, $2, $3, COALESCE($4, NOW()), $5, $6, $7, $8, $9)
+                                    tool_calls, tokens_used, progress, transcript, input_prompt)
+            VALUES ($1, $2, $3, COALESCE($4, NOW()), $5, $6, $7, $8, $9, $10)
             RETURNING {_CYCLE_RUN_LIST_COLUMNS}
             """,
             task_id,
@@ -953,6 +1068,7 @@ async def api_cycle_runs_add(request: Request) -> JSONResponse:
             body.get("tokens_used"),
             json.dumps(progress or {}),
             transcript_bytes,
+            input_prompt,
         )
     result = _cycle_run(row)
     result["has_transcript"] = transcript_bytes is not None
@@ -1201,6 +1317,7 @@ def _cycle_run(row) -> dict:
         "tool_calls": row["tool_calls"],
         "tokens_used": row["tokens_used"],
         "progress": json.loads(row["progress"]) if isinstance(row["progress"], str) else (row["progress"] or {}),
+        "input_prompt": row.get("input_prompt"),
         "created_at": row["created_at"].isoformat(),
         "has_transcript": bool(row.get("has_transcript", False)),
     }

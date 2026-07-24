@@ -52,9 +52,11 @@ export default function MemoryCard({ memory, selected, showSimilarity, onClick }
           <Label color={badgeColor}>{memory.category.replace(/_/g, ' ')}</Label>
           {memory.repo && <Label variant="outline">{memory.repo}</Label>}
           {displayKey(memory) && (
-            <Label color="blue" href={sourceUrl(memory) || '#'} onClick={(e) => e.stopPropagation()}>
-              {displayKey(memory)}
-            </Label>
+            <span onClick={(e) => e.stopPropagation()}>
+              <Label color="blue" href={sourceUrl(memory) || '#'}>
+                {displayKey(memory)}
+              </Label>
+            </span>
           )}
           {memory.tags.map((t) => (
             <Label key={t} variant="outline">{t}</Label>

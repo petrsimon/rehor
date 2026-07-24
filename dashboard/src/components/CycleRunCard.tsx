@@ -105,9 +105,11 @@ export default function CycleRunCard({ run, selected, onClick }: Props) {
           </FlexItem>
           {extKey && (
             <FlexItem>
-              <Label color="blue" href={extUrl || '#'} onClick={(e) => e.stopPropagation()}>
-                {extKey}
-              </Label>
+              <span onClick={(e) => e.stopPropagation()}>
+                <Label color="blue" href={extUrl || '#'}>
+                  {extKey}
+                </Label>
+              </span>
             </FlexItem>
           )}
           {progress.summary && (

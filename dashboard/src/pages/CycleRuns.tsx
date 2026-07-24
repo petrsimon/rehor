@@ -406,6 +406,14 @@ function CycleRunDetail({
           </>
         )}
 
+        {run.input_prompt && (
+          <>
+            <Divider style={{ margin: '16px 0' }} />
+            <Content component="h4">Input Prompt</Content>
+            <pre className="input-prompt-content">{run.input_prompt}</pre>
+          </>
+        )}
+
         <Divider style={{ margin: '16px 0' }} />
         <Content component="h4">Transcript</Content>
         {run.has_transcript ? (

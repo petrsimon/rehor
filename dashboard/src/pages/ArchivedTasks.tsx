@@ -6,6 +6,7 @@ import TaskCard from '../components/TaskCard';
 import DetailPanel from '../components/DetailPanel';
 import Pagination from '../components/Pagination';
 import { Label, Content } from '@patternfly/react-core';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 const LIMIT = 20;
 
@@ -14,6 +15,8 @@ export default function ArchivedTasks({ instanceId }: { instanceId?: string }) {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Task | null>(null);
+  const [restoreKey, setRestoreKey] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const { onEvent } = useWS();
 
@@ -35,8 +38,19 @@ export default function ArchivedTasks({ instanceId }: { instanceId?: string }) {
     });
   }, [onEvent, load]);
 
-  const handleUnarchive = async (key: string) => {
-    await unarchiveTask(key);
+  const handleConfirmRestore = async () => {
+    if (!restoreKey) return;
+    const res = await unarchiveTask(restoreKey);
+    setRestoreKey(null);
+    if (!res.ok) {
+      let msg = `Request failed (${res.status})`;
+      try {
+        const body = await res.json();
+        if (body?.error) msg = body.error;
+      } catch { /* ignore non-JSON */ }
+      setError(msg);
+      return;
+    }
     setSelected(null);
     load();
   };
@@ -70,10 +84,26 @@ export default function ArchivedTasks({ instanceId }: { instanceId?: string }) {
             type="task"
             task={selected}
             onClose={() => setSelected(null)}
-            onUnarchive={handleUnarchive}
+            onUnarchive={(key) => setRestoreKey(key)}
           />
         </div>
       )}
+      <ConfirmDialog
+        open={restoreKey !== null}
+        title="Restore task"
+        message={`Restore ${restoreKey}? It will become active again.`}
+        confirmLabel="Restore"
+        onConfirm={handleConfirmRestore}
+        onCancel={() => setRestoreKey(null)}
+      />
+      <ConfirmDialog
+        open={error !== null}
+        title="Error"
+        message={error || ''}
+        confirmLabel="OK"
+        onConfirm={() => setError(null)}
+        onCancel={() => setError(null)}
+      />
     </div>
   );
 }

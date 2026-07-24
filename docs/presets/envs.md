@@ -158,7 +158,11 @@ Adds the Slack notification skill. The bot sends alerts when PRs are created, ti
 
 **When to use**: Any instance where the team wants Slack notifications about bot activity.
 
-**Requires env var**: `SLACK_WEBHOOK_URL` (Slack incoming webhook URL)
+**Requires env var**: `SLACK_WEBHOOK_URL` — supports two webhook types:
+- **Incoming Webhook** (`https://hooks.slack.com/services/...`) — full mrkdwn support including `<url|label>` hyperlinks, `<!subteam^ID>` mentions, bold, block quotes. Recommended.
+- **Workflow Builder Webhook** (`https://hooks.slack.com/triggers/...`) — variable content is plain text inside rich_text blocks; mrkdwn link syntax and mentions are not rendered.
+
+The payload key is auto-detected from the URL: `{"text": ...}` for Incoming Webhooks, `{"msg": ...}` for Workflow Builder.
 
 **Depends on**: nothing
 

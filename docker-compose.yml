@@ -25,6 +25,7 @@ services:
     environment:
       DATABASE_URL: postgresql://bot:bot@postgres:5432/bot_memory
       TRUSTED_BOT_ACCOUNTS: "${TRUSTED_BOT_ACCOUNTS:-}"
+      KUBEARCHIVE_TOKEN: "${KUBEARCHIVE_TOKEN:-}"
     depends_on:
       postgres:
         condition: service_healthy

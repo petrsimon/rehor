@@ -36,17 +36,19 @@ mcp = FastMCP(
 )
 
 # Register MCP tools
-from .tools.tasks import register_task_tools  # noqa: E402
+from .tools.cycles import register_cycle_tools  # noqa: E402
+from .tools.konflux import register_konflux_tools  # noqa: E402
+from .tools.org_members import register_org_member_tools  # noqa: E402
 from .tools.rag import register_rag_tools  # noqa: E402
 from .tools.slack import register_slack_tools  # noqa: E402
-from .tools.org_members import register_org_member_tools  # noqa: E402
-from .tools.cycles import register_cycle_tools  # noqa: E402
+from .tools.tasks import register_task_tools  # noqa: E402
 
 register_task_tools(mcp)
 register_rag_tools(mcp)
 register_slack_tools(mcp)
 register_org_member_tools(mcp)
 register_cycle_tools(mcp)
+register_konflux_tools(mcp)
 
 
 # Health check
@@ -78,31 +80,35 @@ async def asset_files(request: Request) -> FileResponse:
 
 # REST API for the dashboard
 from .api import (  # noqa: E402
-    api_tasks,
-    api_task_delete,
-    api_task_unarchive,
+    api_analytics,
+    api_bot_status,
+    api_costs,
+    api_cycle_run_transcript,
+    api_cycle_runs,
+    api_cycle_runs_by_task,
+    api_instance_wake_check,
+    api_instance_wake_trigger,
+    api_instances,
     api_memories,
+    api_memory_delete,
+    api_memory_embeddings,
     api_memory_get,
     api_memory_search,
-    api_memory_embeddings,
-    api_memory_delete,
     api_memory_upload,
-    api_tags,
     api_stats,
-    api_bot_status,
-    api_instances,
-    api_instance_wake_trigger,
-    api_instance_wake_check,
-    api_costs,
-    api_analytics,
-    api_cycle_runs,
-    api_cycle_run_transcript,
-    api_cycle_runs_by_task,
+    api_tags,
+    api_task_delete,
+    api_task_pause,
+    api_task_unarchive,
+    api_task_unpause,
+    api_tasks,
 )
 
 mcp.custom_route("/api/tasks", methods=["GET"])(api_tasks)
 mcp.custom_route("/api/tasks/{key:path}", methods=["DELETE"])(api_task_delete)
 mcp.custom_route("/api/tasks/{key:path}/unarchive", methods=["POST"])(api_task_unarchive)
+mcp.custom_route("/api/tasks/{key:path}/pause", methods=["POST"])(api_task_pause)
+mcp.custom_route("/api/tasks/{key:path}/unpause", methods=["POST"])(api_task_unpause)
 mcp.custom_route("/api/memories", methods=["GET"])(api_memories)
 mcp.custom_route("/api/memories/search", methods=["GET"])(api_memory_search)
 mcp.custom_route("/api/memories/upload", methods=["POST"])(api_memory_upload)

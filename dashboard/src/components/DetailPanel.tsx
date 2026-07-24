@@ -35,6 +35,8 @@ interface TaskDetailProps {
   onClose: () => void;
   onDelete?: (key: string) => void;
   onUnarchive?: (key: string) => void;
+  onPause?: (key: string) => void;
+  onUnpause?: (key: string) => void;
 }
 
 type Props = MemoryDetailProps | TaskDetailProps;
@@ -159,7 +161,14 @@ function MemoryDetail({ memory, onClose, onDelete }: Omit<MemoryDetailProps, 'ty
   );
 }
 
-function TaskDetail({ task, onClose, onDelete, onUnarchive }: Omit<TaskDetailProps, 'type'> & { onDelete?: (key: string) => void; onUnarchive?: (key: string) => void }) {
+function TaskDetail({
+  task,
+  onClose,
+  onDelete,
+  onUnarchive,
+  onPause,
+  onUnpause,
+}: Omit<TaskDetailProps, 'type'>) {
   const meta = task.metadata || {};
   const prs: Array<{ repo: string; number: number; url: string; host: string }> =
     meta.prs || [];
@@ -167,6 +176,10 @@ function TaskDetail({ task, onClose, onDelete, onUnarchive }: Omit<TaskDetailPro
   const key = displayKey(task);
   const url = sourceUrl(task);
   const artifacts = task.artifacts || [];
+  const isActive =
+    task.status === 'in_progress' ||
+    task.status === 'pr_open' ||
+    task.status === 'pr_changes';
 
   return (
     <Card isGlass>
@@ -325,6 +338,20 @@ function TaskDetail({ task, onClose, onDelete, onUnarchive }: Omit<TaskDetailPro
       </CardBody>
       <CardFooter>
         <Flex gap={{ default: 'gapSm' }}>
+          {onUnpause && task.status === 'paused' && (
+            <FlexItem>
+              <Button variant="primary" onClick={() => onUnpause(key)}>
+                Unpause Task
+              </Button>
+            </FlexItem>
+          )}
+          {onPause && isActive && (
+            <FlexItem>
+              <Button variant="secondary" onClick={() => onPause(key)}>
+                Pause Task
+              </Button>
+            </FlexItem>
+          )}
           {onUnarchive && (
             <FlexItem>
               <Button variant="secondary" onClick={() => onUnarchive(key)}>
@@ -332,7 +359,7 @@ function TaskDetail({ task, onClose, onDelete, onUnarchive }: Omit<TaskDetailPro
               </Button>
             </FlexItem>
           )}
-          {onDelete && (
+          {onDelete && task.status !== 'archived' && (
             <FlexItem>
               <Button variant="danger" onClick={() => onDelete(key)}>
                 Archive Task

@@ -9,7 +9,14 @@
   --yellow: #d29922;
   --red: #f85149;
   --purple: #bc8cff;
+  --shadow: rgba(0, 0, 0, 0.2);
+  --overlay: rgba(0, 0, 0, 0.2);
+  --code-bg: rgba(0, 0, 0, 0.3);
+  --toast-bg: rgba(22, 27, 34, 0.85);
+  --tab-active: rgba(255, 255, 255, 0.04);
+  --row-border: rgba(48, 54, 61, 0.3);
 }
+
 
 * {
   margin: 0;
@@ -399,7 +406,7 @@ header {
 }
 .instance-card:hover {
   border-color: var(--text-dim);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 8px var(--shadow);
 }
 .instance-card.state-working {
   border-left-color: var(--yellow);
@@ -619,10 +626,42 @@ select:focus,
   background: rgba(88, 166, 255, 0.1);
 }
 
+.btn-pause {
+  background: transparent;
+  color: var(--yellow);
+  border: 1px solid var(--yellow);
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn-pause:hover {
+  background: rgba(210, 153, 34, 0.1);
+}
+
+.btn-unpause {
+  background: transparent;
+  color: var(--green);
+  border: 1px solid var(--green);
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn-unpause:hover {
+  background: rgba(63, 185, 80, 0.1);
+}
+
 .detail-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
+}
+
+.detail-actions .btn-delete {
+  margin-top: 0;
+  width: auto;
 }
 
 /* Card grid */
@@ -751,10 +790,10 @@ select:focus,
 
 .task-paused-reason {
   font-size: 12px;
-  color: var(--yellow);
+  color: var(--text-dim);
   margin-top: 4px;
   padding: 4px 8px;
-  background: rgba(210, 153, 34, 0.08);
+  background: rgba(139, 148, 158, 0.08);
   border-radius: 4px;
 }
 
@@ -916,7 +955,7 @@ select:focus,
   margin-bottom: 16px;
   max-height: 300px;
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--overlay);
   padding: 10px;
   border-radius: 6px;
   font-family: inherit;
@@ -960,7 +999,7 @@ select:focus,
 }
 
 .paused-section {
-  background: rgba(210, 153, 34, 0.08);
+  background: rgba(139, 148, 158, 0.08);
   padding: 8px 10px;
   border-radius: 6px;
 }
@@ -977,14 +1016,14 @@ select:focus,
 }
 .progress-info code {
   font-size: 12px;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--code-bg);
   padding: 1px 4px;
   border-radius: 3px;
 }
 
 .detail-json {
   font-size: 12px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--overlay);
   padding: 10px;
   border-radius: 6px;
   overflow-x: auto;
@@ -1162,7 +1201,7 @@ select:focus,
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: rgba(22, 27, 34, 0.85);
+  background: var(--toast-bg);
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 12px;
@@ -1294,7 +1333,7 @@ select:focus,
   border-color: var(--text-dim);
 }
 .metric-tab.active {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--tab-active);
 }
 
 .cycle-chart-legend {
@@ -1327,7 +1366,7 @@ select:focus,
   grid-template-columns: 130px 1fr 70px 70px 80px 150px 80px;
   gap: 8px;
   padding: 8px 4px;
-  border-bottom: 1px solid rgba(48, 54, 61, 0.3);
+  border-bottom: 1px solid var(--row-border);
   font-size: 13px;
   align-items: center;
 }
@@ -1478,9 +1517,9 @@ select:focus,
   text-transform: uppercase;
 }
 .cycle-type-badge.task_work { background: rgba(88,166,255,0.15); color: var(--accent); }
-.cycle-type-badge.idle { background: rgba(110,118,129,0.15); color: #8b949e; }
-.cycle-type-badge.error { background: rgba(248,81,73,0.15); color: #f85149; }
-.cycle-type-badge.triage_only { background: rgba(210,153,34,0.15); color: #d29922; }
+.cycle-type-badge.idle { background: rgba(110,118,129,0.15); color: var(--text-dim); }
+.cycle-type-badge.error { background: rgba(248,81,73,0.15); color: var(--red); }
+.cycle-type-badge.triage_only { background: rgba(210,153,34,0.15); color: var(--yellow); }
 
 .cycle-run-meta {
   display: flex;
@@ -1555,6 +1594,21 @@ select:focus,
   font-size: 12px;
 }
 .btn-toggle-raw.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.input-prompt-content {
+  background: #0d1520;
+  color: #8b949e;
+  padding: 12px;
+  border-radius: 6px;
+  border-left: 3px solid #1f6feb;
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 4px;
+}
 
 .transcript-raw {
   background: var(--pf-t--global--background--color--primary--default, #010409);
@@ -1833,4 +1887,102 @@ select:focus,
   .summary-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Confirm dialog */
+.confirm-dialog {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0;
+  max-width: 420px;
+  width: 90vw;
+  margin: auto;
+  inset: 0;
+  position: fixed;
+}
+.confirm-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+.confirm-dialog-content {
+  padding: 20px;
+}
+.confirm-dialog-content h3 {
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+.confirm-dialog-content p {
+  font-size: 14px;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+.confirm-dialog-input {
+  margin-bottom: 16px;
+}
+.confirm-dialog-input label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.confirm-dialog-input input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  outline: none;
+}
+.confirm-dialog-input input:focus {
+  border-color: var(--accent);
+}
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.btn-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.btn-cancel:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+.btn-confirm {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.btn-confirm:hover {
+  opacity: 0.9;
+}
+
+/* Theme toggle */
+.theme-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px;
+  color: var(--text-dim);
+  transition: color 0.15s;
+}
+.theme-toggle:hover {
+  color: var(--text);
 }
