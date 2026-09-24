@@ -13,6 +13,7 @@ import {
   type PreflightResult,
   type PreflightScriptResult,
   type PythonBridge,
+  type ScheduledMaintenanceRequest,
 } from "../ports/python-bridge";
 import type { McpServerConfig } from "../ports/runtime-config";
 import { abortError, isRecord } from "../utils";
@@ -61,6 +62,16 @@ export class PythonCoordinatorBridge implements PythonBridge {
       signal,
     );
     return parseConfigPreparationResult(result);
+  }
+
+  async runScheduledMaintenance(
+    input: ScheduledMaintenanceRequest,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.request(
+      { protocolVersion: PROTOCOL_VERSION, operation: "scheduled_maintenance", ...input },
+      signal,
+    );
   }
 
   async idlePreflightSkip(input: IdlePreflightSkipRequest, signal?: AbortSignal): Promise<void> {
@@ -201,6 +212,9 @@ function parseConfigPreparationResult(value: unknown): ConfigPreparationResult {
     remoteAgentDir: nullableString(object.remoteAgentDir, "config.remoteAgentDir"),
     sharedAgentDir: nullableString(object.sharedAgentDir, "config.sharedAgentDir"),
     claudeMdPath: stringValue(object.claudeMdPath, "config.claudeMdPath"),
+    ...(object.gitConfigGlobal === undefined
+      ? {}
+      : { gitConfigGlobal: nullableString(object.gitConfigGlobal, "config.gitConfigGlobal") }),
     mcpServers: parseMcpServers(object.mcpServers, "config.mcpServers"),
     openCodeMcpServers: parseRequiredOpenCodeMcpServers(object.openCodeMcpServers),
     allowedTools: stringArray(object.allowedTools ?? [], "config.allowedTools"),

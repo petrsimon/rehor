@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
@@ -29,6 +29,7 @@ export interface CompatibilitySink {
 }
 
 export interface PreflightCycleInput {
+  label: string;
   instanceId: string;
   state: "idle" | "error";
   transcript: string;
@@ -78,18 +79,23 @@ export function createCompatibilitySink(options: CompatibilitySinkOptions): Comp
   const writeCycleRun = async (record: CycleRunRecord): Promise<void> => {
     const stored = transcripts.get(record.attemptId);
     const transcript = stored ? transcriptText(stored.records) : "";
-    let transcriptBase64: string | undefined;
+    const transcriptDirectory = join(options.dataDirectory, "transcripts");
+    const rawTranscriptPath = join(transcriptDirectory, `${record.attemptId}.jsonl`);
+    let transcriptBase64: string;
+    await mkdir(transcriptDirectory, { recursive: true });
+    await writeFile(rawTranscriptPath, transcript, "utf8");
     try {
       const compressed = await compress(transcript);
       transcriptBase64 = Buffer.from(compressed).toString("base64");
-      await mkdir(join(options.dataDirectory, "transcripts"), { recursive: true });
-      await writeFile(
-        join(options.dataDirectory, "transcripts", `${record.attemptId}.jsonl.zst`),
-        compressed,
-      );
+      await writeFile(join(transcriptDirectory, `${record.attemptId}.jsonl.zst`), compressed);
     } catch (error) {
+      transcripts.delete(record.attemptId);
       logger.warn(`coordinator transcript compression failed: ${describe(error)}`);
+      throw new Error(`coordinator transcript compression failed: ${describe(error)}`, {
+        cause: error,
+      });
     }
+    await unlink(rawTranscriptPath);
 
     const payload = toCycleRunPayload(record, transcriptBase64);
     await writeLocal("cycle-runs.jsonl", {
@@ -97,8 +103,8 @@ export function createCompatibilitySink(options: CompatibilitySinkOptions): Comp
       run_id: record.runId,
       attempt_id: record.attemptId,
     });
-    await postJson(options.cycleRunsUrl, payload, fetchImpl, logger);
     transcripts.delete(record.attemptId);
+    await postJson(options.cycleRunsUrl, payload, fetchImpl, logger);
   };
 
   const writeCost = async (record: CostRecord): Promise<void> => {
@@ -143,6 +149,9 @@ export function createCompatibilitySink(options: CompatibilitySinkOptions): Comp
         payload.transcript_b64 = Buffer.from(await compress(input.transcript)).toString("base64");
       } catch (error) {
         logger.warn(`coordinator preflight transcript compression failed: ${describe(error)}`);
+        throw new Error(`coordinator preflight transcript compression failed: ${describe(error)}`, {
+          cause: error,
+        });
       }
       await writeLocal("cycle-runs.jsonl", payload);
       await postJson(options.cycleRunsUrl, omitUndefined(payload), fetchImpl, logger);
@@ -155,32 +164,109 @@ export function createCompatibilitySink(options: CompatibilitySinkOptions): Comp
         instanceId: input.instanceId,
       });
       await metrics.observe({
+        type: "counter",
         name: "devbot_preflight_outcome_total",
         value: 1,
-        labels: { outcome: input.state },
+        labels: { label: input.label, action: input.state === "idle" ? "skip" : "error" },
       });
     },
   };
 }
 
+type ScalarMetricPoint = Extract<MetricPoint, { type: "counter" | "gauge" }>;
+type HistogramMetricPoint = Extract<MetricPoint, { type: "histogram" }>;
+type StoredMetric =
+  | { kind: "scalar"; point: ScalarMetricPoint; value: number }
+  | {
+      kind: "histogram";
+      point: HistogramMetricPoint;
+      bucketCounts: number[];
+      count: number;
+      sum: number;
+    };
+
 export class PrometheusMetricStore {
-  private readonly values = new Map<string, { point: MetricPoint; value: number }>();
+  private readonly values = new Map<string, StoredMetric>();
+  private readonly definitions = new Map<
+    string,
+    { type: MetricPoint["type"]; buckets?: readonly number[] }
+  >();
 
   async observe(point: MetricPoint): Promise<void> {
+    const definition = this.definitions.get(point.name);
+    if (definition && definition.type !== point.type) {
+      throw new Error(`Prometheus metric '${point.name}' changed type`);
+    }
+    if (
+      point.type === "histogram" &&
+      definition?.buckets &&
+      !sameBuckets(definition.buckets, point.buckets)
+    ) {
+      throw new Error(`Prometheus histogram '${point.name}' changed buckets`);
+    }
+    if (!definition) {
+      this.definitions.set(point.name, {
+        type: point.type,
+        ...(point.type === "histogram" ? { buckets: [...point.buckets] } : {}),
+      });
+    }
+
     const key = `${point.name}|${stableLabels(point.labels)}`;
     const current = this.values.get(key);
-    if (current) current.value += point.value;
-    else this.values.set(key, { point, value: point.value });
+    if (!current) {
+      if (point.type === "histogram") {
+        const histogram: StoredMetric = {
+          kind: "histogram",
+          point,
+          bucketCounts: point.buckets.map(() => 0),
+          count: 0,
+          sum: 0,
+        };
+        this.observeHistogram(histogram, point.value);
+        this.values.set(key, histogram);
+      } else {
+        this.values.set(key, { kind: "scalar", point, value: point.value });
+      }
+      return;
+    }
+
+    if (current.kind === "histogram") {
+      if (point.type !== "histogram")
+        throw new Error(`Prometheus metric '${point.name}' changed type`);
+      this.observeHistogram(current, point.value);
+    } else {
+      if (point.type === "histogram")
+        throw new Error(`Prometheus metric '${point.name}' changed type`);
+      current.value = point.type === "counter" ? current.value + point.value : point.value;
+    }
   }
 
   render(): string {
-    const groups = new Map<string, { type: "counter" | "gauge"; lines: string[] }>();
-    for (const { point, value } of [...this.values.values()].sort((a, b) =>
-      a.point.name.localeCompare(b.point.name),
-    )) {
-      const type = point.name.endsWith("_total") ? "counter" : "gauge";
-      const group = groups.get(point.name) ?? { type, lines: [] };
-      group.lines.push(`${point.name}${renderLabels(point.labels)} ${formatNumber(value)}`);
+    const groups = new Map<string, { type: MetricPoint["type"]; lines: string[] }>();
+    const values = [...this.values.values()].sort((a, b) => {
+      const nameOrder = a.point.name.localeCompare(b.point.name);
+      return nameOrder || stableLabels(a.point.labels).localeCompare(stableLabels(b.point.labels));
+    });
+    for (const metric of values) {
+      const point = metric.point;
+      const group = groups.get(point.name) ?? { type: point.type, lines: [] };
+      if (metric.kind === "histogram") {
+        const histogramPoint = metric.point;
+        histogramPoint.buckets.forEach((bound, index) => {
+          group.lines.push(
+            `${histogramPoint.name}_bucket${renderLabels({ ...histogramPoint.labels, le: String(bound) })} ${metric.bucketCounts[index]}`,
+          );
+        });
+        group.lines.push(
+          `${histogramPoint.name}_bucket${renderLabels({ ...histogramPoint.labels, le: "+Inf" })} ${metric.count}`,
+          `${histogramPoint.name}_sum${renderLabels(histogramPoint.labels)} ${formatNumber(metric.sum)}`,
+          `${histogramPoint.name}_count${renderLabels(histogramPoint.labels)} ${metric.count}`,
+        );
+      } else {
+        group.lines.push(
+          `${point.name}${renderLabels(point.labels)} ${formatNumber(metric.value)}`,
+        );
+      }
       groups.set(point.name, group);
     }
 
@@ -190,6 +276,21 @@ export class PrometheusMetricStore {
     }
     return `${lines.join("\n")}\n`;
   }
+
+  private observeHistogram(
+    metric: Extract<StoredMetric, { kind: "histogram" }>,
+    value: number,
+  ): void {
+    metric.count += 1;
+    metric.sum += value;
+    metric.point.buckets.forEach((bound, index) => {
+      if (value <= bound) metric.bucketCounts[index] = (metric.bucketCounts[index] ?? 0) + 1;
+    });
+  }
+}
+
+function sameBuckets(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 export function toLegacyCostEntry(record: CostRecord): Record<string, unknown> {
@@ -273,10 +374,12 @@ async function postJson(
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(5_000),
     });
-    if (!response.ok)
-      logger.warn(`coordinator compatibility POST ${url} returned HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
   } catch (error) {
     logger.warn(`coordinator compatibility POST ${url} failed: ${describe(error)}`);
+    throw new Error(`coordinator compatibility POST ${url} failed: ${describe(error)}`, {
+      cause: error,
+    });
   }
 }
 

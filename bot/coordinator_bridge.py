@@ -9,7 +9,9 @@ stderr so stdout remains machine-readable.
 from __future__ import annotations
 
 import json
+import os
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +106,7 @@ def _prepare_config(request: dict[str, Any]) -> dict[str, Any]:
 
     label = _required_string(request, "label")
     runtime_config = load_config(script_dir)
+    runner.setup_git(script_dir)
     profile_dir, shared_dir = runner.sync_config_repo(label)
 
     if shared_dir:
@@ -160,6 +163,7 @@ def _prepare_config(request: dict[str, Any]) -> dict[str, Any]:
         "remoteAgentDir": str(profile_dir) if profile_dir else None,
         "sharedAgentDir": str(shared_dir) if shared_dir else None,
         "claudeMdPath": str(script_dir / "CLAUDE.md"),
+        "gitConfigGlobal": os.environ.get("GIT_CONFIG_GLOBAL"),
         "mcpServers": mcp_servers,
         "openCodeMcpServers": opencode_mcp_servers,
         "allowedTools": ALLOWED_TOOLS,
@@ -217,6 +221,13 @@ def _cleanup(request: dict[str, Any]) -> None:
     runner.cleanup_between_cycles(script_dir)
 
 
+def _scheduled_maintenance(request: dict[str, Any]) -> None:
+    _script_dir, runner = _maintenance_script_dir(request)
+    # Digest helpers print JSON; reserve bridge stdout for its response object.
+    with redirect_stdout(sys.stderr):
+        runner._try_slack_digest()
+
+
 def handle(request: dict[str, Any]) -> Any:
     if request.get("protocolVersion", PROTOCOL_VERSION) != PROTOCOL_VERSION:
         raise BridgeError("unsupported protocolVersion")
@@ -226,6 +237,9 @@ def handle(request: dict[str, Any]) -> Any:
         return _run_preflight(request)
     if operation == "prepare":
         return _prepare_config(request)
+    if operation == "scheduled_maintenance":
+        _scheduled_maintenance(request)
+        return None
     if operation == "idle_skip":
         _idle_skip(request)
         return None
@@ -235,7 +249,7 @@ def handle(request: dict[str, Any]) -> Any:
     if operation == "cleanup":
         _cleanup(request)
         return None
-    raise BridgeError("operation must be preflight, prepare, idle_skip, idle_start, or cleanup")
+    raise BridgeError("operation must be preflight, prepare, scheduled_maintenance, idle_skip, idle_start, or cleanup")
 
 
 def main() -> int:

@@ -133,16 +133,149 @@ describe("compatibility adapters", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("renders escaped Prometheus labels and cumulative observations", async () => {
+  it("rejects failed HTTP projections while keeping the local JSONL record", async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), "rehor-coordinator-"));
+    const sink = createCompatibilitySink({
+      dataDirectory,
+      costsUrl: "http://memory-server/api/costs",
+      fetch: vi.fn(async () => new Response("unavailable", { status: 503 })),
+    });
+    const costs = sink.writers.costs;
+    if (!costs) throw new Error("cost writer missing");
+
+    await expect(costs.write(cost)).rejects.toThrow("HTTP 503");
+    expect(JSON.parse(await readFile(join(dataDirectory, "costs.jsonl"), "utf8"))).toMatchObject({
+      attempt_id: cost.attemptId,
+      cost_usd: cost.costUsd,
+    });
+  });
+
+  it("fails a cycle-run projection when transcript compression fails", async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), "rehor-coordinator-"));
+    const fetch = vi.fn(async () => new Response("{}", { status: 201 }));
+    const sink = createCompatibilitySink({
+      dataDirectory,
+      cycleRunsUrl: "http://memory-server/api/cycle-runs",
+      fetch,
+      compressTranscript: async () => {
+        throw new Error("zstd output exceeded limit");
+      },
+    });
+    const transcripts = sink.writers.transcripts;
+    const cycleRuns = sink.writers.cycleRuns;
+    if (!transcripts || !cycleRuns) throw new Error("cycle-run writers missing");
+    await transcripts.append({
+      runId: cycle.runId,
+      attemptId: cycle.attemptId,
+      instanceId: cycle.instanceId,
+      sequence: 1,
+      occurredAt: cycle.startedAt,
+      event: { sequence: 1 } as never,
+      run: { runId: cycle.runId } as never,
+    });
+
+    await expect(cycleRuns.write(cycle)).rejects.toThrow("transcript compression failed");
+    expect(
+      await readFile(join(dataDirectory, "transcripts", `${cycle.attemptId}.jsonl`), "utf8"),
+    ).toContain('{"sequence":1}');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("renders escaped Prometheus labels and cumulative counter observations", async () => {
     const metrics = new PrometheusMetricStore();
     const points: MetricPoint[] = [
-      { name: "devbot_cycles_total", value: 1, labels: { label: 'bot"1', status: "ok" } },
-      { name: "devbot_cycles_total", value: 2, labels: { label: 'bot"1', status: "ok" } },
+      {
+        type: "counter",
+        name: "devbot_cycles_total",
+        value: 1,
+        labels: { label: 'bot"1', status: "ok" },
+      },
+      {
+        type: "counter",
+        name: "devbot_cycles_total",
+        value: 2,
+        labels: { label: 'bot"1', status: "ok" },
+      },
     ];
     for (const point of points) await metrics.observe(point);
 
     const output = metrics.render();
     expect(output).toContain("# TYPE devbot_cycles_total counter");
     expect(output).toContain('devbot_cycles_total{label="bot\\"1",status="ok"} 3');
+  });
+
+  it("sets gauges to their latest value rather than accumulating them", async () => {
+    const metrics = new PrometheusMetricStore();
+    for (const value of [1, 2, 0]) {
+      await metrics.observe({
+        type: "gauge",
+        name: "devbot_preflight_consecutive_errors",
+        value,
+        labels: { label: "hcc-ai-framework" },
+      });
+    }
+
+    expect(metrics.render()).toContain(
+      'devbot_preflight_consecutive_errors{label="hcc-ai-framework"} 0',
+    );
+  });
+
+  it("renders histogram bucket, sum, and count series", async () => {
+    const metrics = new PrometheusMetricStore();
+    await metrics.observe({
+      type: "histogram",
+      name: "devbot_cycle_duration_seconds",
+      value: 42.5,
+      labels: { label: "hcc-ai-framework", work_type: "task" },
+      buckets: [30, 60],
+    });
+
+    const output = metrics.render();
+    expect(output).toContain("# TYPE devbot_cycle_duration_seconds histogram");
+    expect(output).toContain(
+      'devbot_cycle_duration_seconds_bucket{label="hcc-ai-framework",le="30",work_type="task"} 0',
+    );
+    expect(output).toContain(
+      'devbot_cycle_duration_seconds_bucket{label="hcc-ai-framework",le="60",work_type="task"} 1',
+    );
+    expect(output).toContain(
+      'devbot_cycle_duration_seconds_bucket{label="hcc-ai-framework",le="+Inf",work_type="task"} 1',
+    );
+    expect(output).toContain(
+      'devbot_cycle_duration_seconds_sum{label="hcc-ai-framework",work_type="task"} 42.5',
+    );
+    expect(output).toContain(
+      'devbot_cycle_duration_seconds_count{label="hcc-ai-framework",work_type="task"} 1',
+    );
+  });
+
+  it("keeps Python's legacy preflight metric label names and action values", async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), "rehor-coordinator-"));
+    const sink = createCompatibilitySink({
+      dataDirectory,
+      compressTranscript: async (text) => Buffer.from(text),
+    });
+    await sink.writePreflightCycle({
+      label: "hcc-ai-framework",
+      instanceId: "instance-1",
+      state: "idle",
+      transcript: "No work found",
+      inputPrompt: "No work found",
+    });
+    await sink.writePreflightCycle({
+      label: "hcc-ai-framework",
+      instanceId: "instance-1",
+      state: "error",
+      transcript: "Preflight failed",
+      inputPrompt: "Preflight failed",
+    });
+
+    const output = sink.metricStore.render();
+    expect(output).toContain(
+      'devbot_preflight_outcome_total{action="skip",label="hcc-ai-framework"} 1',
+    );
+    expect(output).toContain(
+      'devbot_preflight_outcome_total{action="error",label="hcc-ai-framework"} 1',
+    );
   });
 });

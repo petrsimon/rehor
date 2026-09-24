@@ -58,6 +58,10 @@ export interface CleanupBetweenCyclesRequest {
   scriptDir: string;
 }
 
+export interface ScheduledMaintenanceRequest {
+  scriptDir: string;
+}
+
 export interface ConfigPreparationResult {
   model: string;
   /** Adapter/runtime selected by the instance for the future coordinator. */
@@ -78,6 +82,8 @@ export interface ConfigPreparationResult {
   remoteAgentDir: string | null;
   sharedAgentDir: string | null;
   claudeMdPath: string;
+  /** Generated Git identity, signing, and proxy configuration path from Python setup. */
+  gitConfigGlobal?: string | null;
   /** MCP servers for the legacy Claude adapter: resolved values, no project servers. */
   mcpServers: Readonly<Record<string, McpServerConfig>>;
   /** Explicit OpenCode view: reference-only values, including project servers. */
@@ -96,6 +102,7 @@ export interface PythonBridge {
     signal?: AbortSignal,
   ): Promise<ConfigPreparationResult>;
   /** Optional maintenance hooks preserve Python idle/cleanup behavior during migration. */
+  runScheduledMaintenance?(input: ScheduledMaintenanceRequest, signal?: AbortSignal): Promise<void>;
   idlePreflightSkip?(input: IdlePreflightSkipRequest, signal?: AbortSignal): Promise<void>;
   idlePreflightStart?(input: IdlePreflightStartRequest, signal?: AbortSignal): Promise<void>;
   cleanupBetweenCycles?(input: CleanupBetweenCyclesRequest, signal?: AbortSignal): Promise<void>;

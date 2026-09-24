@@ -437,8 +437,12 @@ describe("legacy compatibility projection", () => {
 
     // bot/metrics.py declares this histogram as ["label", "work_type"]; any extra
     // or missing key makes the Python registry reject the observation outright.
+    expect(duration?.type).toBe("histogram");
     expect(duration?.labels).toEqual({ label: run.label, work_type: "pr_review" });
     expect(duration?.value).toBe(4);
+    expect(duration?.type === "histogram" ? duration.buckets : []).toEqual([
+      30, 60, 120, 300, 600, 900, 1200, 1800,
+    ]);
   });
 
   it("falls back to work_type unknown for a missing or blank work type", async () => {

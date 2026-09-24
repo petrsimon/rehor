@@ -106,6 +106,26 @@ describe("coordinator loop", () => {
     expect(released.value).toBe(1);
   });
 
+  it("retains a runtime failure in the result instead of counting an empty one-shot as success", async () => {
+    const result = await runCoordinatorLoop({
+      admission: admission({ value: 0 }),
+      scheduler: new CycleScheduler({ intervalMs: 10, idleIntervalMs: 20 }),
+      prepare: async () => prepared(PreflightAction.Start),
+      run: async () => {
+        throw new Error("deployment runtime failed");
+      },
+      maxCycles: 1,
+      sleep: async () => undefined,
+    });
+
+    expect(result).toMatchObject({
+      stopReason: "max_cycles",
+      cycles: 1,
+      results: [],
+      failures: 1,
+    });
+  });
+
   it("runs only actionable cycles and applies normal post-run delay", async () => {
     const sleeps: number[] = [];
     let runCalls = 0;

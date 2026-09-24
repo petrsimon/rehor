@@ -284,12 +284,13 @@ export async function runCoordinator(
   });
   const projection = new LegacyCompatibilityProjection(options.writers);
   const workspaceRoot = options.workspaceRoot ?? options.scriptDir;
-  const environment = options.environment ?? process.env;
+  const environment = { ...(options.environment ?? process.env) };
 
   return runCoordinatorLoop<CoordinatorResult>({
-    admission: new FileCycleAdmission(options.lockPath),
+    admission: new FileCycleAdmission(options.lockPath, options.pythonExecutable),
     scheduler,
     prepare: async (signal) => {
+      await bridge.runScheduledMaintenance?.({ scriptDir: options.scriptDir }, signal);
       const prepared = await prepareCycleInput(bridge, {
         scriptDir: options.scriptDir,
         label: options.label,
@@ -310,6 +311,9 @@ export async function runCoordinator(
         workspacePath: options.scriptDir,
         policyVersion: options.policyVersion,
       });
+      if (prepared.config.gitConfigGlobal) {
+        environment.GIT_CONFIG_GLOBAL = prepared.config.gitConfigGlobal;
+      }
       const registry = createRuntimeRegistryForCycle(prepared, {
         workspaceRoot,
         openCodeDeployment: options.openCodeDeployment,
@@ -319,11 +323,23 @@ export async function runCoordinator(
         environment,
       });
       try {
-        return await executeSelectedRun(registry, { runtimeId: run.runtimeId ?? "claude" }, run, {
-          signal,
-          projection,
-          preparedConfig: prepared.config,
-        });
+        const result = await executeSelectedRun(
+          registry,
+          { runtimeId: run.runtimeId ?? "claude" },
+          run,
+          { signal, projection, preparedConfig: prepared.config },
+        );
+        if (result.error !== undefined) throw result.error;
+        if (
+          result.terminal.payload.state === "failed" ||
+          result.terminal.payload.state === "timed_out"
+        ) {
+          throw new Error(
+            result.terminal.payload.reason ??
+              `runtime returned a ${result.terminal.payload.state} terminal state`,
+          );
+        }
+        return result;
       } finally {
         await bridge.cleanupBetweenCycles?.({ scriptDir: options.scriptDir }, signal);
       }
@@ -341,6 +357,18 @@ export async function runCoordinator(
             { scriptDir: options.scriptDir, instanceId: options.instanceId },
             signal,
           );
+          await options.writers.metrics?.observe({
+            type: "counter",
+            name: "devbot_preflight_outcome_total",
+            value: 1,
+            labels: { label: options.label, action: "start" },
+          });
+          await options.writers.metrics?.observe({
+            type: "gauge",
+            name: "devbot_preflight_consecutive_errors",
+            value: plan.consecutivePreflightErrors,
+            labels: { label: options.label },
+          });
         }
         return;
       }
@@ -357,6 +385,7 @@ export async function runCoordinator(
         );
       }
       const input: PreflightCycleInput = {
+        label: options.label,
         instanceId: options.instanceId,
         state: plan.decision === CycleDecision.Idle ? "idle" : "error",
         transcript: preflight?.transcript ?? "",
@@ -365,6 +394,7 @@ export async function runCoordinator(
       await options.compatibility?.writePreflightCycle(input);
       await bridge.cleanupBetweenCycles?.({ scriptDir: options.scriptDir }, signal);
       await options.writers.metrics?.observe({
+        type: "gauge",
         name: "devbot_preflight_consecutive_errors",
         value: plan.consecutivePreflightErrors,
         labels: { label: options.label },
@@ -380,6 +410,7 @@ export async function runCoordinator(
         instanceId: options.instanceId,
       });
       await options.writers.metrics?.observe({
+        type: "counter",
         name: "devbot_coordinator_errors_total",
         value: 1,
         labels: { label: options.label, phase },

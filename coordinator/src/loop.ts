@@ -46,6 +46,7 @@ export interface CoordinatorLoopResult<TResult> {
   stopReason: LoopStopReason;
   cycles: number;
   results: readonly TResult[];
+  failures: number;
   error?: unknown;
 }
 
@@ -137,21 +138,22 @@ export async function runCoordinatorLoop<TResult>(
   });
   const results: TResult[] = [];
   let cycles = 0;
+  let failures = 0;
   let lease: CycleAdmissionLease | null = null;
 
   try {
     try {
       lease = await options.admission.acquire(signals.signal);
     } catch (error) {
-      if (signals.signal.aborted) return stopped(signals, cycles, results);
+      if (signals.signal.aborted) return stopped(signals, cycles, results, failures);
       await options.onError?.(error, LoopErrorPhase.Admission);
-      return { stopReason: LoopStopReason.Failed, cycles, results, error };
+      return { stopReason: LoopStopReason.Failed, cycles, results, failures: 1, error };
     }
-    if (!lease) return { stopReason: LoopStopReason.AdmissionDenied, cycles, results };
+    if (!lease) return { stopReason: LoopStopReason.AdmissionDenied, cycles, results, failures };
 
     while (!signals.signal.aborted) {
       if (options.maxCycles !== undefined && cycles >= options.maxCycles) {
-        return { stopReason: LoopStopReason.MaxCycles, cycles, results };
+        return { stopReason: LoopStopReason.MaxCycles, cycles, results, failures };
       }
 
       let prepared: PreparedCycleInput;
@@ -160,6 +162,7 @@ export async function runCoordinatorLoop<TResult>(
       } catch (error) {
         if (signals.signal.aborted) break;
         cycles += 1;
+        failures += 1;
         await options.onError?.(error, LoopErrorPhase.Prepare);
         const plan = options.scheduler.planForPreflight(errorPreflight(error));
         await options.onDecision?.(plan, undefined, signals.signal);
@@ -169,6 +172,7 @@ export async function runCoordinatorLoop<TResult>(
 
       const plan = options.scheduler.planForPreflight(prepared.preflight);
       cycles += 1;
+      if (plan.decision === CycleDecision.Error) failures += 1;
       await options.onDecision?.(plan, prepared, signals.signal);
       if (plan.decision !== CycleDecision.Run) {
         if (!(await waitForPlan(plan, options, signals.signal))) break;
@@ -179,6 +183,7 @@ export async function runCoordinatorLoop<TResult>(
         results.push(await options.run(prepared, signals.signal));
       } catch (error) {
         if (signals.signal.aborted) break;
+        failures += 1;
         await options.onError?.(error, LoopErrorPhase.Run);
       }
 
@@ -188,6 +193,7 @@ export async function runCoordinatorLoop<TResult>(
         try {
           signal = await options.sleepSignal();
         } catch (error) {
+          failures += 1;
           await options.onError?.(error, LoopErrorPhase.Sleep);
         }
       }
@@ -203,7 +209,7 @@ export async function runCoordinatorLoop<TResult>(
       }
     }
 
-    return stopped(signals, cycles, results);
+    return stopped(signals, cycles, results, failures);
   } finally {
     try {
       await lease?.release();
@@ -233,11 +239,13 @@ function stopped<TResult>(
   signals: LoopSignalController,
   cycles: number,
   results: readonly TResult[],
+  failures: number,
 ): CoordinatorLoopResult<TResult> {
   return {
     stopReason: signals.stopReason ?? LoopStopReason.Failed,
     cycles,
     results,
+    failures,
   };
 }
 
